@@ -2,103 +2,35 @@
 
 An open-source fact-checking tool: paste or upload text, and each factual claim is checked against reputable sources, scored by risk, and highlighted in the UI. Runs, cumulative spend, and external API usage persist across restarts in `history.json`.
 
+## Table of contents
+
+- [Features](#features)
+- [How it works](#how-it-works)
+- [User interface](#user-interface)
+- [Supported file formats](#supported-file-formats)
+- [Stack](#stack)
+- [Cost](#cost)
+- [Configuration](#configuration)
+- [Running locally](#running-locally)
+- [Production deployment](#production-deployment)
+- [Data on disk](#data-on-disk)
+- [API reference](#api-reference)
+- [Known limitations](#known-limitations)
+- [Contributing](#contributing)
+- [License](#license)
+
 ---
 
-## User interface
+## Features
 
-After signing in, the main screen is a single page with status bars at the top, an input area, and results below.
-
-### Top bars
-
-**Cost bar (all-time / session)**  
-Tracks **total billable spend** per run: Anthropic (Haiku) plus OpenAlex/Voyage after free-tier credits. Token counts are Haiku only.
-
-| Field | Meaning |
-|-------|---------|
-| **All-time** | Total USD (Haiku + billable APIs) + Haiku input/output tokens since the server first saved a run |
-| **This session** | USD and run count since you signed in (resets on page refresh) |
-
-**API usage bar**  
-Tracks **every external service** the backend calls. Counters live in `history.json` and reset daily (UTC) where providers have daily limits. Hover a provider name for notes. Orange bars mean ≥80% of a tracked limit.
-
-| Provider | What is counted | Tracked limit |
-|----------|-----------------|---------------|
-| Anthropic | Input + output tokens | None (`MAX_COST_USD` is estimate-only preflight; see env table) |
-| Voyage | Embedding tokens + API calls | 200M tokens free tier (account lifetime) |
-| OpenAlex | Search calls + estimated USD | $1/day free API credit |
-| Wikipedia | HTTP requests | 5,000/day soft budget |
-| Semantic Scholar | HTTP requests | 5,000/day soft budget |
-| PubMed | HTTP requests | 10,000/day soft budget |
-
-Deleting a past run removes only the saved results; **cost** and **API usage** totals are unchanged (they track real API consumption).
-
-### Header
-
-Title row with **sign out**. Source line lists the databases the app can query (Wikipedia, OpenAlex, Semantic Scholar, PubMed).
-
-### Past fact-checks
-
-Collapsible history of saved runs (newest first, **max 200**). Each row shows date, mode (`sync` = instant, `batch`), claim count, flagged count, cost, **rename**, and **delete**.
-
-**Click a row** to reload **claim results and cost** into the results panel. Original input text is **not stored** — only a short auto-title (~80 characters) for display. Annotated highlighting is unavailable for history loads; claim cards are complete.
-
-### Input area
-
-| Control | Purpose |
-|---------|---------|
-| **Input text** | Paste prose, or drag-and-drop a file |
-| **load sample** | Fills the editor with demo frog text |
-| **upload file** | `.txt`, `.md`, `.html`, `.docx`, `.pdf` |
-| **Estimate pill** | Appears while typing — approximate claim count and **total** cost (Haiku + billable APIs) |
-| **Name this fact-check** | Optional label stored in history (overrides auto title when set) |
-
-**File upload behavior:**
-
-- `.txt` / `.md` — read in the browser
-- `.html` / `.docx` / `.pdf` — sent to `POST /extract/file` for server-side conversion, then loaded into the editor
-- Files **>15,000 bytes** auto-enable batch mode
-- Textarea length **>3,000 characters** shows a large-document batch suggestion banner
-
-### Batch mode toggle
-
-| | **Instant (default)** | **Batch** |
-|---|----------------------|-----------|
-| Speed | Seconds to a few minutes | Up to 24h (often minutes) |
-| Haiku cost | Full Haiku pricing on extraction + scoring | Full price on **extraction**; **50% off scoring** only (Anthropic Batch API) |
-| Progress | Live SSE stream (`POST /analyze/stream`) | Submit may take minutes (extract + index on server), then poll `GET /batch/:id` every 8s |
-| Best for | Normal documents | Very large docs, rate-limit avoidance |
-
-When batch is on, a blue panel shows estimated **total** cost and Haiku-only batch savings.
-
-**Batch job caveat:** Job status is kept **in memory** on the server (not persisted). Completed runs are saved to `history.json`. If the **server restarts** while a batch is in flight, `GET /batch/:id` returns 404 — check **Past fact-checks** after a few minutes; the run may already be saved. If you **refresh the browser** mid-batch, polling stops; keep the tab open or check history later.
-
-### Analyze and progress
-
-**Analyze Claims** starts a run. Instant mode uses Server-Sent Events:
-
-1. Status messages — e.g. *Extracting claims…*, *Indexing sources (chunk + retrieve)…*
-2. Topic line after extraction (when available)
-3. Progress bar — claims scored (`3/8 · 38%`) with the current claim snippet
-
-**Last run** next to the button shows total cost (Haiku + billable APIs), with a Haiku/API split when applicable, plus token counts.
-
-Instant runs have a **180-second server timeout**. Very large documents may need batch mode.
-
-### Results
-
-**Annotated text** (instant runs only) — click a highlighted claim to open its card.
-
-**Risk colors**
-
-| Color | Risk | Meaning |
-|-------|------|---------|
-| Green | Verified | On-topic sources clearly support the claim |
-| Yellow | Low | Mostly supported; minor nuance |
-| Orange | Medium | Partial support or oversimplification |
-| Red | High | Sources contradict or show a major error |
-| Gray | Unverifiable | No on-topic source addresses the claim |
-
-**Claim cards** — explanation plus **Sources** links. Each source is a retrieved *passage* (not necessarily the whole article), labeled with provider (`wikipedia`, `openalex`, `semantic_scholar`, `pubmed`).
+- Extracts atomic factual claims from prose with Claude Haiku
+- Retrieves evidence from Wikipedia, OpenAlex, Semantic Scholar, and PubMed
+- Chunks and indexes source text; optional Voyage semantic search over passages
+- Scores each claim: verified, low, medium, high, or unverifiable
+- Instant mode (SSE progress) or batch mode (50% off Haiku scoring via Anthropic Batch API)
+- Pre-run cost estimates and post-run breakdown (Haiku + billable OpenAlex/Voyage)
+- Persistent history (200 runs), all-time spend, and API usage meters
+- Simple password auth protecting your API keys
 
 ---
 
@@ -138,28 +70,109 @@ flowchart TB
   end
 ```
 
-**Why chunk + retrieve?** Full Wikipedia articles are too long to send to Haiku for every claim. The app indexes the full text once, then pulls only the passages that match each claim (keyword search, plus **Voyage** semantic search when `VOYAGE_API_KEY` is set).
+**Why chunk + retrieve?** Full Wikipedia articles are too long to send to Haiku for every claim. The app indexes the full text once, then pulls only the top **4** passages that match each claim (keyword search, plus **Voyage** semantic search when `VOYAGE_API_KEY` is set).
 
 **Provider routing** — not every database runs for every claim. Extraction assigns `providers` per claim (e.g. PubMed only for medical claims, OpenAlex for research-heavy claims). Wikipedia is almost always included.
 
-**Fetch deduplication** — during indexing, a per-run cache ensures each Wikipedia article, OpenAlex search, Scholar search, and PubMed search is fetched **once**, even when many claims share the same source or query. Concurrent claim goroutines wait on the first fetch instead of hammering the same URL.
+**Fetch deduplication** — during indexing, a per-run cache ensures each Wikipedia article, OpenAlex search, Scholar search, and PubMed search is fetched **once**, even when many claims share the same source or query.
 
 ---
 
-## Data on disk
+## User interface
 
-```mermaid
-flowchart LR
-  DATA_DIR["DATA_DIR/"]
-  DATA_DIR --> HIST[history.json]
-  DATA_DIR --> CORPUS[corpus/*.json]
-  HIST --> RUNS[Past runs + claims — max 200]
-  HIST --> COST[All-time total billable spend]
-  HIST --> API[API usage lifetime + daily]
-  CORPUS --> EMB[Cached Voyage embeddings per source URL]
-```
+After signing in, the main screen is a single page with status bars at the top, an input area, and results below.
 
-Set `DATA_DIR` to an absolute path on a VPS (e.g. `/var/lib/factchecker`) so redeploying the binary does not wipe history or embedding cache.
+### Top bars
+
+**Cost bar (all-time / session)**  
+Tracks **total billable spend** per run: Anthropic (Haiku) plus OpenAlex/Voyage after free-tier credits. Token counts are Haiku only.
+
+| Field | Meaning |
+|-------|---------|
+| **All-time** | Total USD (Haiku + billable APIs) + Haiku input/output tokens since the server first saved a run |
+| **This session** | USD and run count since you signed in (resets on page refresh) |
+
+**API usage bar**  
+Tracks **every external service** the backend calls. Counters live in `history.json` and reset daily (UTC) where providers have daily limits. Hover a provider name for notes. Orange bars mean ≥80% of a tracked limit.
+
+| Provider | What is counted | Tracked limit |
+|----------|-----------------|---------------|
+| Anthropic | Input + output tokens | None (`MAX_COST_USD` is estimate-only preflight; see [Configuration](#configuration)) |
+| Voyage | Embedding tokens + API calls | 200M tokens free tier (account lifetime) |
+| OpenAlex | Search calls + estimated USD | $1/day free API credit |
+| Wikipedia | HTTP requests | 5,000/day soft budget |
+| Semantic Scholar | HTTP requests | 5,000/day soft budget |
+| PubMed | HTTP requests | 10,000/day soft budget |
+
+Deleting a past run removes only the saved results; **cost** and **API usage** totals are unchanged (they track real API consumption).
+
+### Header
+
+Title row with **sign out**. Source line lists the databases the app can query (Wikipedia, OpenAlex, Semantic Scholar, PubMed).
+
+### Past fact-checks
+
+Collapsible history of saved runs (newest first, **max 200**). Each row shows date, mode (`sync` = instant, `batch`), claim count, flagged count, cost, **rename**, and **delete**.
+
+**Click a row** to reload **claim results and cost** into the results panel. Original input text is **not stored** — only a short auto-title (~80 characters) for display. Annotated highlighting is unavailable for history loads; claim cards are complete.
+
+### Input area
+
+| Control | Purpose |
+|---------|---------|
+| **Input text** | Paste prose, or drag-and-drop a file |
+| **load sample** | Fills the editor with demo frog text |
+| **upload file** | `.txt`, `.md`, `.html`, `.docx`, `.pdf` |
+| **Estimate pill** | Appears while typing — approximate claim count and **total** cost (Haiku + billable APIs) |
+| **Name this fact-check** | Optional label stored in history (overrides auto title when set) |
+
+**File upload behavior:**
+
+- `.txt` / `.md` — read in the browser
+- `.html` / `.docx` / `.pdf` — sent to `POST /extract/file` for server-side conversion, then loaded into the editor
+- Files **>15,000 bytes** auto-enable batch mode
+- Textarea length **>3,000 characters** shows a large-document batch suggestion banner
+
+### Batch mode toggle
+
+| | **Instant (default)** | **Batch** |
+|---|----------------------|-----------|
+| Speed | Seconds to a few minutes | Up to 24h for Anthropic to score (often minutes) |
+| Haiku cost | Full Haiku pricing on extraction + scoring | Full price on **extraction**; **50% off scoring** only (Anthropic Batch API) |
+| Progress | Live SSE stream (`POST /analyze/stream`) | HTTP submit blocks while server extracts + indexes (up to **180s**), then poll `GET /batch/:id` every 8s |
+| Best for | Normal documents | Very large docs, rate-limit avoidance |
+
+When batch is on, a blue panel shows estimated **total** cost and Haiku-only batch savings.
+
+**Batch job caveat:** Job status is kept **in memory** on the server (not persisted). Completed runs are saved to `history.json`. If the **server restarts** while a batch is in flight, `GET /batch/:id` returns 404 — check **Past fact-checks** after a few minutes; the run may already be saved. If you **refresh the browser** mid-batch, polling stops; keep the tab open or check history later.
+
+### Analyze and progress
+
+**Analyze Claims** starts a run. Instant mode uses Server-Sent Events:
+
+1. Status messages — e.g. *Extracting claims…*, *Indexing sources (chunk + retrieve)…*
+2. Topic line after extraction (when available)
+3. Progress bar — claims scored (`3/8 · 38%`) with the current claim snippet
+
+**Last run** next to the button shows total cost (Haiku + billable APIs), with a Haiku/API split when applicable, plus token counts.
+
+Instant runs have a **180-second server timeout**. Very large documents may need batch mode.
+
+### Results
+
+**Annotated text** (instant runs only) — click a highlighted claim to open its card.
+
+**Risk colors**
+
+| Color | Risk | Meaning |
+|-------|------|---------|
+| Green | Verified | On-topic sources clearly support the claim |
+| Yellow | Low | Mostly supported; minor nuance |
+| Orange | Medium | Partial support or oversimplification |
+| Red | High | Sources contradict or show a major error |
+| Gray | Unverifiable | No on-topic source addresses the claim |
+
+**Claim cards** — explanation plus **Sources** links. Each source is a retrieved *passage* (not necessarily the whole article), labeled with provider (`wikipedia`, `openalex`, `semantic_scholar`, `pubmed`).
 
 ---
 
@@ -190,9 +203,44 @@ Strip headers, footers, and page numbers before upload when possible — they ad
 
 **System dependency:** `pdftotext` (Poppler) on the server PATH for PDF extraction.
 
+**Project layout:**
+
+```
+Claim-Inspector/
+├── backend/
+│   ├── cmd/server/       # Entry point
+│   ├── internal/         # API, claims, sources, store, …
+│   └── .env.example
+├── frontend/
+│   ├── src/App.jsx       # UI
+│   └── .env.example
+└── README.md
+```
+
 ---
 
-## Environment variables
+## Cost
+
+Haiku pricing (May 2026): **$1 / M input tokens**, **$5 / M output tokens**. The UI shows exact Haiku token usage from API responses.
+
+| Component | Pricing notes |
+|-----------|----------------|
+| **Instant Haiku** | Full price on extraction + per-claim scoring |
+| **Batch Haiku** | Full price on extraction; **50% off scoring tokens** (Anthropic Batch API) |
+| **Voyage** | 200M embed tokens free, then $0.02/M on `voyage-4-lite` |
+| **OpenAlex** | ~$0.001/search; $1/day free credit |
+| **Wikipedia / Scholar / PubMed** | Free (soft request budgets tracked in UI) |
+
+Pre-run estimates and post-run `exact_cost_usd` include **billable aux APIs** after free-tier credits. Hover cost lines for per-provider breakdown.
+
+| Volume (Haiku only, rough) | Instant | Batch scoring ~50% off |
+|----------------------------|---------|-------------------------|
+| ~10 pages | ~$0.01 | ~$0.007 |
+| ~100 pages | ~$0.09 | ~$0.06 |
+
+---
+
+## Configuration
 
 Copy `backend/.env.example` to `backend/.env` (local) or `/etc/factchecker/.env` (production).
 
@@ -210,7 +258,7 @@ Copy `backend/.env.example` to `backend/.env` (local) or `/etc/factchecker/.env`
 |----------|---------|-------------|
 | `MAX_COST_USD` | unlimited | **Preflight only:** reject analyze with HTTP 402 when the **estimated** total (Haiku + billable APIs) would exceed remaining budget. Actual spend is not re-checked after a run completes. |
 | `ALLOWED_ORIGIN` | `*` | CORS origin — set to your `https://` domain in production |
-| `PORT` | `8080` | Backend listen port |
+| `PORT` | `8080` | Backend listen port (localhost only in production; nginx proxies public traffic) |
 | `DATA_DIR` | `data` | History, cost, API usage, and corpus cache root |
 | `VOYAGE_API_KEY` | — | [voyageai.com](https://www.voyageai.com) — semantic chunk retrieval (200M free tokens on lite models) |
 | `OPENALEX_API_KEY` | — | [openalex.org/settings/api](https://openalex.org/settings/api) — scholarly search ($1/day free credit). Works without it |
@@ -220,7 +268,7 @@ Copy `backend/.env.example` to `backend/.env` (local) or `/etc/factchecker/.env`
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `VITE_API_URL` | `http://localhost:8080` | Backend base URL (no trailing slash). In production, usually your public HTTPS origin when nginx proxies API routes |
+| `VITE_API_URL` | `http://localhost:8080` | Backend base URL (no trailing slash). **Production:** set to your public site origin, e.g. `https://yourdomain.com`, because nginx serves the UI and proxies API routes on the same host |
 
 ### Example production `.env` (backend)
 
@@ -239,21 +287,78 @@ Never commit `.env` files.
 
 ---
 
-## Deployment
+## Running locally
 
-### Build frontend
+**Prerequisites:** Go 1.22+, Node.js 18+, `pdftotext` (optional, for PDF upload).
+
+**Backend:**
+
+```bash
+cd backend
+cp .env.example .env    # edit with your keys
+go run ./cmd/server
+# http://localhost:8080 — data in ./data/
+```
+
+**Frontend** (separate terminal):
 
 ```bash
 cd frontend
-npm install
-echo "VITE_API_URL=https://yourdomain.com" > .env
-npm run build
-sudo cp -r dist/* /var/www/factchecker/
+cp .env.example .env    # VITE_API_URL=http://localhost:8080
+npm install && npm run dev
+# http://localhost:5173
 ```
 
-### Build backend
+There is no Vite dev proxy — the frontend calls the backend directly. Set `ALLOWED_ORIGIN=http://localhost:5173` in the backend `.env`, or leave it unset to use `*` during development.
 
-On the server or cross-compile:
+---
+
+## Production deployment
+
+Deploy on a Linux VPS (e.g. Ubuntu on DigitalOcean). The backend listens on **localhost:8080**; **nginx** serves the React build on port 80/443 and forwards API paths to the Go server.
+
+```mermaid
+flowchart LR
+  Browser --> nginx["nginx :443"]
+  nginx --> static["/var/www/factchecker/"]
+  nginx --> go["Go API localhost:8080"]
+  go --> data["/var/lib/factchecker/"]
+```
+
+### Where files live on the server
+
+| What | Path |
+|------|------|
+| Backend binary | `/usr/local/bin/factchecker-server` |
+| Backend env | `/etc/factchecker/.env` |
+| systemd unit | `/etc/systemd/system/factchecker.service` |
+| App data (history, corpus cache) | `/var/lib/factchecker/` |
+| Frontend static files | `/var/www/factchecker/` |
+| nginx site config | `/etc/nginx/sites-available/factchecker` |
+
+### Step-by-step
+
+**1. Install system packages**
+
+```bash
+sudo apt update
+sudo apt install nginx poppler-utils   # poppler-utils provides pdftotext
+```
+
+**2. Create directories and backend env**
+
+```bash
+sudo mkdir -p /etc/factchecker /var/lib/factchecker /var/www/factchecker
+sudo nano /etc/factchecker/.env
+sudo chmod 600 /etc/factchecker/.env
+sudo chown www-data:www-data /var/lib/factchecker
+```
+
+Fill `/etc/factchecker/.env` using the [example above](#example-production-env-backend). Set `DATA_DIR=/var/lib/factchecker` and `ALLOWED_ORIGIN=https://yourdomain.com`.
+
+**3. Build and install the backend**
+
+On the server (or cross-compile from your machine):
 
 ```bash
 cd backend
@@ -261,22 +366,9 @@ GOOS=linux GOARCH=amd64 go build -o factchecker-server ./cmd/server
 sudo cp factchecker-server /usr/local/bin/factchecker-server
 ```
 
-Install PDF support:
+**4. Create the systemd service**
 
-```bash
-sudo apt install poppler-utils   # provides pdftotext
-```
-
-### Server setup
-
-```bash
-sudo mkdir -p /etc/factchecker /var/lib/factchecker
-sudo nano /etc/factchecker/.env          # fill variables
-sudo chmod 600 /etc/factchecker/.env
-sudo chown www-data:www-data /var/lib/factchecker
-```
-
-**systemd** — `/etc/systemd/system/factchecker.service`:
+Create `/etc/systemd/system/factchecker.service`:
 
 ```ini
 [Unit]
@@ -295,15 +387,34 @@ User=www-data
 WantedBy=multi-user.target
 ```
 
+Enable and start:
+
 ```bash
 sudo systemctl daemon-reload
 sudo systemctl enable --now factchecker
-sudo journalctl -u factchecker -f   # expect "Voyage embeddings enabled" or "lexical only"
+sudo journalctl -u factchecker -f
+# Expect "Voyage embeddings enabled" or "lexical only"
 ```
 
-### nginx
+**5. Build and install the frontend**
 
-The regex below matches `/analyze`, `/analyze/stream`, `/analyze/file`, `/extract/file`, `/batch/…`, and `/history/…`:
+```bash
+cd frontend
+npm install
+echo "VITE_API_URL=https://yourdomain.com" > .env
+npm run build
+sudo cp -r dist/* /var/www/factchecker/
+```
+
+**6. Configure nginx**
+
+This config is **not in the repo** — create it on the server:
+
+```bash
+sudo nano /etc/nginx/sites-available/factchecker
+```
+
+Paste (replace `yourdomain.com` with your domain or droplet IP while testing):
 
 ```nginx
 server {
@@ -330,79 +441,86 @@ server {
 }
 ```
 
-HTTPS: `sudo certbot --nginx -d yourdomain.com`, then set `ALLOWED_ORIGIN=https://yourdomain.com` and `sudo systemctl restart factchecker`.
+The regex matches `/analyze`, `/analyze/stream`, `/analyze/file`, `/extract/file`, `/batch/…`, and `/history/…`.
+
+Enable the site:
+
+```bash
+sudo ln -s /etc/nginx/sites-available/factchecker /etc/nginx/sites-enabled/
+sudo rm /etc/nginx/sites-enabled/default   # optional on a fresh droplet
+sudo nginx -t
+sudo systemctl reload nginx
+```
+
+If you already have an nginx site for this domain, edit that file instead of creating a duplicate `server { }` block.
+
+**7. HTTPS (recommended)**
+
+```bash
+sudo apt install certbot python3-certbot-nginx
+sudo certbot --nginx -d yourdomain.com
+```
+
+Then set `ALLOWED_ORIGIN=https://yourdomain.com` in `/etc/factchecker/.env` and restart:
+
+```bash
+sudo systemctl restart factchecker
+```
+
+**8. Verify**
+
+- Open `https://yourdomain.com` — login page loads
+- `curl https://yourdomain.com/health` → `{"status":"ok"}`
+- Run a small fact-check; confirm **Past fact-checks** and cost bars update
 
 ### Updating a deployment
 
 1. `git pull`
-2. Rebuild backend binary → `/usr/local/bin/factchecker-server` → `sudo systemctl restart factchecker`
+2. Rebuild backend → `/usr/local/bin/factchecker-server` → `sudo systemctl restart factchecker`
 3. Rebuild frontend → `/var/www/factchecker/` (hard-refresh browser)
 4. Add any new `.env` keys before restart
+5. Reload nginx only if you changed the site config (`sudo nginx -t && sudo systemctl reload nginx`)
 
 ---
 
-## Running locally
+## Data on disk
 
-**Backend:**
-
-```bash
-cd backend
-cp .env.example .env
-go run ./cmd/server
-# http://localhost:8080 — data in ./data/
+```mermaid
+flowchart LR
+  DATA_DIR["DATA_DIR/"]
+  DATA_DIR --> HIST[history.json]
+  DATA_DIR --> CORPUS[corpus/*.json]
+  HIST --> RUNS[Past runs + claims — max 200]
+  HIST --> COST[All-time total billable spend]
+  HIST --> API[API usage lifetime + daily]
+  CORPUS --> EMB[Cached Voyage embeddings per source URL]
 ```
 
-**Frontend:**
-
-```bash
-cd frontend
-cp .env.example .env   # VITE_API_URL=http://localhost:8080
-npm install && npm run dev
-# http://localhost:5173
-```
-
-There is no Vite dev proxy — the frontend calls the backend directly; ensure `ALLOWED_ORIGIN` allows `http://localhost:5173` or use `*`.
-
----
-
-## Cost
-
-Haiku pricing (May 2026): **$1 / M input tokens**, **$5 / M output tokens**. The UI shows exact Haiku token usage from API responses.
-
-| Component | Pricing notes |
-|-----------|----------------|
-| **Instant Haiku** | Full price on extraction + per-claim scoring |
-| **Batch Haiku** | Full price on extraction; **50% off scoring tokens** (Anthropic Batch API) |
-| **Voyage** | 200M embed tokens free, then $0.02/M on `voyage-4-lite` |
-| **OpenAlex** | ~$0.001/search; $1/day free credit |
-| **Wikipedia / Scholar / PubMed** | Free (soft request budgets tracked in UI) |
-
-Pre-run estimates and post-run `exact_cost_usd` include **billable aux APIs** after free-tier credits. Hover cost lines for per-provider breakdown.
-
-| Volume (Haiku only, rough) | Instant | Batch scoring ~50% off |
-|----------------------------|---------|-------------------------|
-| ~10 pages | ~$0.01 | ~$0.007 |
-| ~100 pages | ~$0.09 | ~$0.06 |
+Set `DATA_DIR` to an absolute path on a VPS (e.g. `/var/lib/factchecker`) so redeploying the binary does not wipe history or embedding cache.
 
 ---
 
 ## API reference
 
-Public: `GET /health`, `POST /login`.  
-All other routes below require `Authorization: Bearer <token>` (24h session, in-memory on server).
+**Public routes:** `GET /health`, `POST /login`  
+**All other routes** require `Authorization: Bearer <token>` (24h session, in-memory on server).
 
-Analyze routes return **HTTP 402** if a preflight estimate would exceed `MAX_COST_USD` (estimate-only; see env table).
+Analyze routes return **HTTP 402** if a preflight estimate would exceed `MAX_COST_USD` (estimate-only; see [Configuration](#configuration)).
 
-### `POST /login`
+### Authentication
+
+**`POST /login`**
 
 ```json
 { "username": "...", "password": "..." }
 → { "token": "..." }
 ```
 
-### `POST /estimate`
+**`POST /logout`** — invalidate session (requires Bearer token).
 
-Pre-run cost (no external API calls):
+### Cost estimate
+
+**`POST /estimate`** — pre-run cost, no external API calls:
 
 ```json
 { "text": "..." }
@@ -423,31 +541,29 @@ Pre-run cost (no external API calls):
   }
 ```
 
-### `POST /extract/file`
+### File extraction
 
-Multipart form: `file` (max 10 MB). Returns extracted plain text:
+**`POST /extract/file`** — multipart form field `file` (max 10 MB):
 
 ```json
 → { "text": "...", "filename": "report.pdf" }
 ```
 
-### Analyze endpoints (three paths, one pipeline)
+Used by the web UI for `.html`, `.docx`, and `.pdf` before analyze.
 
-All analyze routes run the same core pipeline (extract → fetch/index → score → save). They differ in **transport** and **batch vs instant**:
+### Analyze (one pipeline, three transports)
+
+All analyze routes run **extract → fetch/index → score → save**. They differ in transport and batch vs instant:
 
 | Endpoint | Used by UI? | Behavior |
 |----------|-------------|----------|
-| `POST /analyze/stream` | **Yes** — instant mode | Server-Sent Events: live status, progress, final JSON in `done` event. **`batch: true` rejected (400).** Uses client request context; 180s timeout. |
-| `POST /analyze` | **Yes** — batch submit; also sync JSON API | `"batch": true` → `{batch_id}` immediately; poll `GET /batch/:id`. `"batch": false` → blocks until done, returns JSON (no SSE). Used by `/analyze/file` and API clients. |
-| `POST /analyze/file` | Optional / scripts | Multipart file upload → same as `/analyze` (sync or batch via form field). The web UI uses `/extract/file` + paste instead. |
+| `POST /analyze/stream` | **Yes** — instant mode | Server-Sent Events: status, progress, final JSON in `done` event. **`batch: true` rejected (400).** 180s timeout. |
+| `POST /analyze` | **Yes** — batch submit | `"batch": true` → blocks up to **180s** while server extracts + indexes, then returns `{ "batch_id": "..." }`; poll `GET /batch/:id`. `"batch": false` → sync JSON (no SSE). |
+| `POST /analyze/file` | Scripts only | Multipart upload → same as `/analyze`. Web UI uses `/extract/file` + paste instead. |
 
-The web UI uses **`/analyze/stream` for instant** and **`/analyze` with `batch: true` for batch**. The sync JSON path (`POST /analyze` with `batch: false`) is kept for API clients and `/analyze/file`; it runs the same logic as stream but returns one JSON blob at the end with no SSE progress.
+**JSON body** (paste routes): `{ "text": "...", "batch": false, "label": "...", "filename": "..." }`
 
-### `POST /analyze` · `POST /analyze/stream` · `POST /analyze/file`
-
-JSON body (paste routes): `{ "text": "...", "batch": false, "label": "...", "filename": "..." }`
-
-**Instant mode** uses **`POST /analyze/stream`** (SSE):
+**Instant SSE events** (`POST /analyze/stream`):
 
 ```
 event: status      data: {"message":"Extracting claims…"}
@@ -458,13 +574,13 @@ event: done        data: {"claims":[...],"cost":{"anthropic_cost_usd":0.02,"exac
 event: error       data: {"message":"..."}
 ```
 
-**Batch mode** uses `POST /analyze` with `"batch": true` → `{ "batch_id": "..." }`, then poll `GET /batch/:id`.
-
-**File analyze** uses `POST /analyze/file` (multipart: `file`, optional `label`, `batch=true`).
+**Batch:** `POST /analyze` with `"batch": true` → poll `GET /batch/:id` every few seconds until `status` is `done` or `failed`.
 
 Claim `sources[]` entries include `provider`: `wikipedia`, `openalex`, `semantic_scholar`, or `pubmed`.
 
-### `GET /history`
+### History
+
+**`GET /history`**
 
 ```json
 → {
@@ -494,16 +610,15 @@ Each run's `cost` object:
 }
 ```
 
-### Other endpoints
+**`PATCH /history/:id`** — rename run: `{ "label": "..." }`  
+**`DELETE /history/:id`** — remove run from history (all-time totals unchanged)
+
+### Other routes
 
 | Method | Path | Purpose |
 |--------|------|---------|
-| `POST` | `/extract/file` | Extract text from uploaded file (max 10 MB); used by web UI for `.html`/`.docx`/`.pdf` |
 | `GET` | `/batch/:id` | Poll async batch job (in-memory until complete) |
-| `PATCH` | `/history/:id` | Rename run `{ "label": "..." }` |
-| `DELETE` | `/history/:id` | Delete run from history (totals unchanged) |
 | `GET` | `/health` | `{ "status": "ok" }` |
-| `POST` | `/logout` | Invalidate session |
 
 ---
 
@@ -513,6 +628,7 @@ Each run's `cost` object:
 |-------|--------|
 | **Spend cap** | `MAX_COST_USD` blocks requests whose **estimate** exceeds the remaining budget. Actual cumulative spend can exceed the cap if estimates are low or many runs complete quickly. |
 | **Batch jobs** | In-memory only on the server; lost on restart. Browser refresh stops polling (no `batch_id` in local storage). |
+| **Batch submit timeout** | `POST /analyze` with `batch: true` blocks up to **180s** for extract + index before returning `batch_id`. Very large documents may fail here. |
 | **History** | Max **200** runs; full input text **not** stored (only ~80-char title + claims). |
 | **Sessions** | Auth tokens in-memory on server (24h); stored in browser as `fc_token` in `sessionStorage`; lost on server restart. |
 | **Instant timeout** | `/analyze/stream` has a **180s** server deadline. |
