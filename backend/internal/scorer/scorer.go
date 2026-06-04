@@ -13,17 +13,19 @@ import (
 	"factchecker/internal/types"
 )
 
-const scoreSystemPrompt = `You are a fact-checking assistant. You will be given a factual claim and a set of reference sources retrieved from Wikipedia and academic databases.
+const scoreSystemPrompt = `You are a fact-checking assistant. You will be given a factual claim and reference sources retrieved from Wikipedia and academic databases.
 
 Your job:
-1. Compare the claim against the sources
-2. Assign a risk level:
-   - "verified": claim is clearly supported by the sources
-   - "low": claim is mostly accurate with minor nuance issues
-   - "medium": claim is partially accurate, oversimplified, or disputed
-   - "high": claim contradicts the sources or appears fabricated
-   - "unverifiable": sources don't contain enough information to assess
-3. Write a 1-2 sentence explanation referencing what the sources say
+1. Use the sources as primary evidence. If they directly address the claim, base your rating on them.
+2. If the sources are off-topic or too shallow, fall back to your own training knowledge to assess the claim.
+3. Only use "unverifiable" when you genuinely cannot assess the claim from either the sources or your own knowledge.
+4. Assign a risk level:
+   - "verified": claim is well-supported (by sources or your knowledge)
+   - "low": mostly accurate with minor nuance
+   - "medium": partially accurate, oversimplified, or disputed
+   - "high": contradicts sources or your knowledge, or appears fabricated
+   - "unverifiable": cannot be assessed even with your knowledge
+5. Write a 1-2 sentence explanation. If you relied on your own knowledge instead of the sources, say so briefly.
 
 Respond ONLY with a JSON object. No markdown, no backticks:
 {"risk": "verified|low|medium|high|unverifiable", "explanation": "..."}`

@@ -473,6 +473,7 @@ export default function App() {
         const reader=resp.body.getReader();
         const decoder=new TextDecoder();
         let buf="";
+        let eventType=""; let dataLine="";
 
         while(true){
           const {done,value}=await reader.read();
@@ -481,7 +482,6 @@ export default function App() {
           // Parse SSE lines
           const lines=buf.split("\n");
           buf=lines.pop(); // last incomplete line stays in buffer
-          let eventType=""; let dataLine="";
           for(const line of lines){
             if(line.startsWith("event:")) eventType=line.slice(6).trim();
             else if(line.startsWith("data:")) dataLine=line.slice(5).trim();

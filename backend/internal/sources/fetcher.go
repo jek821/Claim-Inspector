@@ -45,7 +45,7 @@ func (f *Fetcher) generateSearchQuery(ctx context.Context, claim string) string 
 	body, _ := json.Marshal(map[string]any{
 		"model":      "claude-haiku-4-5-20251001",
 		"max_tokens": 30,
-		"system":     "Extract 3-5 key search terms from this factual claim for a Wikipedia search. Return only the search terms as a short phrase. No explanation, no extra punctuation.",
+		"system":     "Extract 3-5 key search terms for a Wikipedia search about this factual claim. Always include the main subject (the animal, person, or object the claim is about). Return only the search terms as a short phrase. No explanation, no punctuation.",
 		"messages":   []map[string]string{{"role": "user", "content": claim}},
 	})
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost,
