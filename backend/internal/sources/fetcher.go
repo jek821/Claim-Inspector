@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"encoding/xml"
 	"fmt"
 	"io"
 	"net/http"
@@ -14,10 +13,6 @@ import (
 
 	"factchecker/internal/types"
 )
-
-func decodeXML(data []byte) *xml.Decoder {
-	return xml.NewDecoder(bytes.NewReader(data))
-}
 
 // Fetcher retrieves supporting sources for a claim.
 type Fetcher struct {
@@ -44,8 +39,8 @@ func (f *Fetcher) generateSearchQuery(ctx context.Context, claim string) string 
 	}
 	body, _ := json.Marshal(map[string]any{
 		"model":      "claude-haiku-4-5-20251001",
-		"max_tokens": 30,
-		"system":     "Extract 3-5 key search terms for a Wikipedia search about this factual claim. Always include the main subject (the animal, person, or object the claim is about). Return only the search terms as a short phrase. No explanation, no punctuation.",
+		"max_tokens": 60,
+		"system":     "Generate a concise Wikipedia search query for the factual claim. Include the specific subject (animal, person, place, or object), the key attribute being claimed, and any relevant scientific or technical terms. The query must be tightly focused so Wikipedia returns the article that directly covers this claim. Return only the search query, no explanation.",
 		"messages":   []map[string]string{{"role": "user", "content": claim}},
 	})
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost,
@@ -90,10 +85,9 @@ func (f *Fetcher) FetchAll(ctx context.Context, claim string) []types.Source {
 		mu.Unlock()
 	}
 
-	wg.Add(4)
+	wg.Add(3)
 	go func() { defer wg.Done(); add(f.fetchWikipedia(ctx, query)) }()
 	go func() { defer wg.Done(); add(f.fetchSemanticScholar(ctx, query)) }()
-	go func() { defer wg.Done(); add(f.fetchArXiv(ctx, query)) }()
 	go func() { defer wg.Done(); add(f.fetchPubMed(ctx, query)) }()
 
 	wg.Wait()
@@ -195,70 +189,6 @@ func (f *Fetcher) fetchSemanticScholar(ctx context.Context, claim string) []type
 			URL:      p.URL,
 			Snippet:  snippet,
 			Provider: "semantic_scholar",
-		})
-	}
-	return sources
-}
-
-// --- arXiv ---
-
-type arXivFeed struct {
-	Entries []struct {
-		Title   string `xml:"title"`
-		Summary string `xml:"summary"`
-		ID      string `xml:"id"`
-	} `xml:"entry"`
-}
-
-func (f *Fetcher) fetchArXiv(ctx context.Context, claim string) []types.Source {
-	q := url.QueryEscape(claim)
-	endpoint := fmt.Sprintf(
-		"https://export.arxiv.org/api/query?search_query=all:%s&max_results=2&sortBy=relevance",
-		q,
-	)
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
-	if err != nil {
-		return nil
-	}
-	req.Header.Set("User-Agent", "FactChecker/1.0")
-
-	resp, err := f.client.Do(req)
-	if err != nil || resp.StatusCode != http.StatusOK {
-		return nil
-	}
-	defer resp.Body.Close()
-
-	body, _ := io.ReadAll(resp.Body)
-
-	// Minimal Atom XML parse — strip namespaces then decode
-	cleaned := strings.ReplaceAll(string(body), `xmlns="http://www.w3.org/2005/Atom"`, "")
-	cleaned = strings.ReplaceAll(cleaned, `xmlns:opensearch="http://a9.com/-/spec/opensearch/1.1/"`, "")
-	cleaned = strings.ReplaceAll(cleaned, `xmlns:arxiv="http://arxiv.org/schemas/atom"`, "")
-
-	dec := decodeXML([]byte(cleaned))
-	var feed arXivFeed
-	if err := dec.Decode(&feed); err != nil {
-		return nil
-	}
-
-	var sources []types.Source
-	for _, e := range feed.Entries {
-		title := strings.TrimSpace(strings.ReplaceAll(e.Title, "\n", " "))
-		snippet := strings.TrimSpace(strings.ReplaceAll(e.Summary, "\n", " "))
-		if len(snippet) > 300 {
-			snippet = snippet[:300] + "..."
-		}
-		arxivURL := strings.TrimSpace(e.ID)
-		// Convert API ID to abstract page URL
-		arxivURL = strings.Replace(arxivURL, "http://arxiv.org/abs/", "https://arxiv.org/abs/", 1)
-		if title == "" || arxivURL == "" {
-			continue
-		}
-		sources = append(sources, types.Source{
-			Title:    title + " [arXiv]",
-			URL:      arxivURL,
-			Snippet:  snippet,
-			Provider: "arxiv",
 		})
 	}
 	return sources
