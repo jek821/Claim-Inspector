@@ -391,6 +391,7 @@ PRs welcome. Key areas for improvement:
 - Additional source APIs (JSTOR, bioRxiv, Google Scholar scraping)
 - User accounts — currently single-user only
 - Export results as PDF or CSV
+- Vectorized store of uploaded documents, integrated chat bot that can answer targeted questions using vectorized data.
 
 ---
 
