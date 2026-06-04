@@ -3,28 +3,31 @@ import { useState, useRef, useEffect, useCallback } from "react";
 const SAMPLE = `Frogs are among the most remarkable vertebrates on the planet. The earliest known frog appeared roughly 190 million years ago, meaning they have shared the Earth with dinosaurs. The "horror frog" of Central Africa contracts its muscles so forcefully when threatened that it snaps its own toe bones, pushing sharp claws through the skin like a biological switchblade. Researchers have also found that certain tree frog species can navigate using Earth's magnetic field at night, orienting themselves relative to the poles when visual landmarks are unavailable. When a frog swallows food, it pulls its eyes down into the roof of its mouth to help push food down its throat.`;
 
 const RISK = {
-  verified:     { bg:"rgba(74,222,128,0.15)",  border:"#4ade80", label:"Verified",      dot:"#4ade80" },
-  low:          { bg:"rgba(250,204,21,0.15)",   border:"#facc15", label:"Low Risk",      dot:"#facc15" },
-  medium:       { bg:"rgba(251,146,60,0.18)",   border:"#fb923c", label:"Medium Risk",   dot:"#fb923c" },
-  high:         { bg:"rgba(248,113,113,0.22)",  border:"#f87171", label:"High Risk",     dot:"#f87171" },
-  unverifiable: { bg:"rgba(148,163,184,0.15)",  border:"#94a3b8", label:"Unverifiable",  dot:"#94a3b8" },
+  verified:     { bg:"rgba(34,197,94,0.14)",  border:"#16a34a", label:"Verified",      dot:"#15803d" },
+  low:          { bg:"rgba(234,179,8,0.14)",   border:"#ca8a04", label:"Low Risk",      dot:"#a16207" },
+  medium:       { bg:"rgba(249,115,22,0.14)",  border:"#ea580c", label:"Medium Risk",   dot:"#c2410c" },
+  high:         { bg:"rgba(239,68,68,0.14)",   border:"#dc2626", label:"High Risk",     dot:"#b91c1c" },
+  unverifiable: { bg:"rgba(100,116,139,0.12)", border:"#64748b", label:"Unverifiable",  dot:"#475569" },
 };
 
 const API = import.meta.env.VITE_API_URL ?? "http://localhost:8080";
 
-// High-contrast palette — avoid dark-on-dark text
 const C = {
-  text:      "#f8fafc",
-  secondary: "#dbeafe",
-  muted:     "#b8c9dc",
-  faint:     "#8fa3bb",
-  label:     "#e2e8f0",
-  border:    "#5a6d85",
-  borderDim: "#3d5168",
-  surface:   "#1a2230",
-  surfaceHi: "#222d3f",
-  bar:       "#141c28",
-  barApi:    "#182030",
+  page:      "#f1f5f9",
+  text:      "#0f172a",
+  secondary: "#334155",
+  muted:     "#64748b",
+  faint:     "#94a3b8",
+  label:     "#475569",
+  border:    "#cbd5e1",
+  borderDim: "#e2e8f0",
+  surface:   "#ffffff",
+  surfaceHi: "#f8fafc",
+  bar:       "#e8edf3",
+  barApi:    "#dfe8f4",
+  green:     "#15803d",
+  blue:      "#2563eb",
+  link:      "#1d4ed8",
 };
 
 // Shown when /history has not returned api_usage yet (older backend or first paint)
@@ -71,23 +74,23 @@ function CostSummary({cost,label="exact",style={}}) {
   const auxNote=aux<=0.00001&&lines.some(l=>l.note)?" · APIs $0 (free tier)":aux>0.00001?` · APIs ${fmt$(aux)}`:"";
   return (
     <span style={style} title={lines.length?auxCostTitle(lines):undefined}>
-      {label}: <span style={{color:"#4ade80",fontWeight:700}}>{fmt$(total)}</span>
+      {label}: <span style={{color:C.green,fontWeight:700}}>{fmt$(total)}</span>
       {showSplit&&<span style={{fontSize:"11px",color:C.muted,marginLeft:"6px"}}>(Haiku {fmt$(haiku)}{auxNote})</span>}
     </span>
   );
 }
 
-function Spinner({size=12,color="#94a3b8"}) {
-  return <span style={{display:"inline-block",width:size,height:size,border:`2px solid #1e2a3a`,borderTopColor:color,borderRadius:"50%",animation:"spin 0.8s linear infinite",flexShrink:0}}/>;
+function Spinner({size=12,color="#64748b"}) {
+  return <span style={{display:"inline-block",width:size,height:size,border:`2px solid ${C.borderDim}`,borderTopColor:color,borderRadius:"50%",animation:"spin 0.8s linear infinite",flexShrink:0}}/>;
 }
 
 // ── Shared styles ─────────────────────────────────────────────────────────────
 const S = {
   label: {fontSize:"12px",letterSpacing:"0.1em",color:C.label,fontWeight:600,textTransform:"uppercase",display:"block",marginBottom:"6px"},
-  input: {width:"100%",background:"#121820",border:`1px solid ${C.border}`,borderRadius:"6px",color:C.text,fontSize:"14px",padding:"10px 12px",outline:"none",fontFamily:"inherit",boxSizing:"border-box"},
-  btn:   {background:"#2563eb",color:"#f8fafc",border:"none",borderRadius:"6px",padding:"11px 24px",fontSize:"13px",fontFamily:"inherit",fontWeight:600,letterSpacing:"0.04em",cursor:"pointer",display:"flex",alignItems:"center",gap:"8px"},
-  ghost: {background:C.surfaceHi,border:`1px solid ${C.border}`,color:C.secondary,fontSize:"12px",padding:"5px 12px",borderRadius:"4px",cursor:"pointer",fontFamily:"inherit"},
-  card:  {background:C.surface,border:`1px solid ${C.borderDim}`,borderRadius:"8px",padding:"20px 24px",color:C.text},
+  input: {width:"100%",background:C.surface,border:`1px solid ${C.border}`,borderRadius:"6px",color:C.text,fontSize:"14px",padding:"10px 12px",outline:"none",fontFamily:"inherit",boxSizing:"border-box"},
+  btn:   {background:C.blue,color:"#ffffff",border:"none",borderRadius:"6px",padding:"11px 24px",fontSize:"13px",fontFamily:"inherit",fontWeight:600,letterSpacing:"0.04em",cursor:"pointer",display:"flex",alignItems:"center",gap:"8px"},
+  ghost: {background:C.surface,border:`1px solid ${C.border}`,color:C.secondary,fontSize:"12px",padding:"5px 12px",borderRadius:"4px",cursor:"pointer",fontFamily:"inherit"},
+  card:  {background:C.surface,border:`1px solid ${C.border}`,borderRadius:"8px",padding:"20px 24px",color:C.text,boxShadow:"0 1px 2px rgba(15,23,42,0.04)"},
 };
 
 // ── Login ─────────────────────────────────────────────────────────────────────
@@ -104,7 +107,7 @@ function Login({onLogin}) {
     finally { setLoading(false); }
   }
   return (
-    <div style={{minHeight:"100vh",background:"#0f1419",display:"flex",alignItems:"center",justifyContent:"center",fontFamily:"'DM Mono','Fira Mono',monospace"}}>
+    <div style={{minHeight:"100vh",background:C.page,display:"flex",alignItems:"center",justifyContent:"center",fontFamily:"'DM Mono','Fira Mono',monospace"}}>
       <div style={{width:360,padding:"40px",...S.card}}>
         <div style={{marginBottom:"32px",textAlign:"center"}}>
           <span style={{fontSize:"11px",letterSpacing:"0.2em",color:C.muted,textTransform:"uppercase"}}>VERIFY</span>
@@ -113,7 +116,7 @@ function Login({onLogin}) {
         <div style={{display:"flex",flexDirection:"column",gap:"14px"}}>
           <div><label style={S.label}>Username</label><input value={u} onChange={e=>setU(e.target.value)} autoComplete="username" style={S.input} onKeyDown={e=>e.key==="Enter"&&go()}/></div>
           <div><label style={S.label}>Password</label><input type="password" value={p} onChange={e=>setP(e.target.value)} autoComplete="current-password" style={S.input} onKeyDown={e=>e.key==="Enter"&&go()}/></div>
-          {err&&<div style={{color:"#f87171",fontSize:"12px"}}>{err}</div>}
+          {err&&<div style={{color:"#dc2626",fontSize:"12px"}}>{err}</div>}
           <button onClick={go} disabled={loading||!u||!p} style={{...S.btn,justifyContent:"center",opacity:loading||!u||!p?0.5:1,marginTop:"8px"}}>
             {loading?<><Spinner/>Signing in…</>:"Sign In"}
           </button>
@@ -125,11 +128,11 @@ function Login({onLogin}) {
 }
 
 // ── Toggle ────────────────────────────────────────────────────────────────────
-function Toggle({value,onChange,label,color="#60a5fa"}) {
+function Toggle({value,onChange,label,color="#2563eb"}) {
   return (
     <label style={{display:"flex",alignItems:"center",gap:"8px",cursor:"pointer",fontSize:"13px",color:value?color:C.secondary,userSelect:"none",fontWeight:value?600:400}}>
-      <span style={{display:"inline-block",width:32,height:18,borderRadius:9,background:value?`${color}44`:"#252a35",border:`1px solid ${value?color:C.border}`,position:"relative",transition:"all 0.2s",flexShrink:0}} onClick={()=>onChange(!value)}>
-        <span style={{position:"absolute",top:2,left:value?14:2,width:12,height:12,borderRadius:"50%",background:value?color:C.muted,transition:"left 0.2s"}}/>
+      <span style={{display:"inline-block",width:32,height:18,borderRadius:9,background:value?"rgba(37,99,235,0.15)":C.surfaceHi,border:`1px solid ${value?color:C.border}`,position:"relative",transition:"all 0.2s",flexShrink:0}} onClick={()=>onChange(!value)}>
+        <span style={{position:"absolute",top:2,left:value?14:2,width:12,height:12,borderRadius:"50%",background:value?color:C.faint,transition:"left 0.2s"}}/>
       </span>
       {label}
     </label>
@@ -153,13 +156,13 @@ function CostBar({allTimeCost,allTimeIn,allTimeOut,sessionCost,sessionRuns}) {
   return (
     <div style={{background:C.bar,borderBottom:`1px solid ${C.border}`,padding:"14px 40px",display:"flex",alignItems:"center",gap:"28px",fontSize:"14px",color:C.secondary,flexWrap:"wrap"}}>
       {block("All-time", <>
-        <span style={{color:"#4ade80",fontWeight:700,fontSize:"17px"}}>{fmt$(allTimeCost)}</span>
+        <span style={{color:C.green,fontWeight:700,fontSize:"17px"}}>{fmt$(allTimeCost)}</span>
         <span style={{color:C.faint}}>·</span>
         <span style={{color:C.text,fontWeight:600}}>{fmtTok(allTimeIn)} in / {fmtTok(allTimeOut)} out</span>
       </>)}
       <span style={{color:C.border,fontSize:"18px",lineHeight:1}}>|</span>
       {block("This session", <>
-        <span style={{color:"#60a5fa",fontWeight:700,fontSize:"17px"}}>{fmt$(sessionCost)}</span>
+        <span style={{color:C.blue,fontWeight:700,fontSize:"17px"}}>{fmt$(sessionCost)}</span>
         <span style={{color:C.faint}}>·</span>
         <span style={{color:C.text,fontWeight:600}}>{sessionRuns} run{sessionRuns!==1?"s":""}</span>
       </>)}
@@ -174,37 +177,37 @@ function APIUsageBar({apiUsage, loading}) {
   const usedFor = p => p.period === "account" ? (p.used_lifetime || 0) : (p.used_daily ?? p.used_lifetime ?? 0);
 
   return (
-    <div style={{background:C.barApi,borderBottom:`2px solid #3b82f6`,padding:"14px 40px 16px",fontSize:"13px",color:C.secondary}}>
+    <div style={{background:C.barApi,borderBottom:`2px solid ${C.blue}`,padding:"14px 40px 16px",fontSize:"13px",color:C.secondary}}>
       <div style={{display:"flex",alignItems:"center",gap:"12px",marginBottom:"12px",flexWrap:"wrap"}}>
-        <span style={{color:"#93c5fd",letterSpacing:"0.08em",textTransform:"uppercase",fontSize:"12px",fontWeight:700}}>API usage</span>
+        <span style={{color:C.blue,letterSpacing:"0.08em",textTransform:"uppercase",fontSize:"12px",fontWeight:700}}>API usage</span>
         <span style={{color:C.muted}}>resets daily UTC · saved in history.json</span>
         {apiUsage?.daily_reset_utc && <span style={{color:C.faint}}>· {apiUsage.daily_reset_utc}</span>}
-        {loading && <span style={{color:"#fbbf24",fontSize:"12px"}}>· updating…</span>}
+        {loading && <span style={{color:"#b45309",fontSize:"12px"}}>· updating…</span>}
       </div>
       <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill, minmax(200px, 1fr))",gap:"14px 24px"}}>
         {providers.map(p => {
           const warn = hot(p);
           const pct = p.limit > 0 ? Math.min(100, p.pct_used || 0) : 0;
-          const accent = warn ? "#fb923c" : "#60a5fa";
+          const accent = warn ? "#ea580c" : C.blue;
           const used = usedFor(p);
           return (
             <div key={p.id} title={p.note || ""}>
               <div style={{display:"flex",justifyContent:"space-between",marginBottom:"6px",gap:"8px",alignItems:"baseline"}}>
-                <span style={{color: warn ? "#fdba74" : C.text, fontWeight: 700, fontSize: "13px", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap"}}>
+                <span style={{color: warn ? "#c2410c" : C.text, fontWeight: 700, fontSize: "13px", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap"}}>
                   {p.display_name}
                 </span>
-                <span style={{color: warn ? "#fdba74" : "#93c5fd", fontWeight: 700, fontSize: "13px", flexShrink: 0}}>
+                <span style={{color: warn ? "#c2410c" : C.blue, fontWeight: 700, fontSize: "13px", flexShrink: 0}}>
                   {p.limit > 0
                     ? `${fmtUsage(used, p.unit)}/${fmtUsage(p.limit, p.unit)}`
                     : fmtUsage(used, p.unit)}
                 </span>
               </div>
               {p.limit > 0 ? (
-                <div style={{height: 10, background: "#2a3548", borderRadius: 5, overflow: "hidden", border: "1px solid #3d5168"}}>
+                <div style={{height: 10, background: C.borderDim, borderRadius: 5, overflow: "hidden", border: `1px solid ${C.border}`}}>
                   <div style={{height: "100%", width: `${Math.max(pct, pct > 0 ? 6 : 0)}%`, background: accent, borderRadius: 4, transition: "width 0.3s"}}/>
                 </div>
               ) : (
-                <div style={{height: 10, background: "#2a3548", borderRadius: 5, border: "1px solid #3d5168", display: "flex", alignItems: "center", paddingLeft: 8}}>
+                <div style={{height: 10, background: C.borderDim, borderRadius: 5, border: `1px solid ${C.border}`, display: "flex", alignItems: "center", paddingLeft: 8}}>
                   <span style={{fontSize: "10px", color: C.muted, letterSpacing: "0.04em"}}>no cap tracked</span>
                 </div>
               )}
@@ -226,23 +229,23 @@ function BatchInfoPanel({estimate,onToggleOff}) {
   const haikuSavings=haikuSync-haikuBatch;
   const savingsPct=haikuSync>0?Math.round(haikuSavings/haikuSync*100):50;
   return (
-    <div style={{padding:"16px 20px",background:"rgba(96,165,250,0.05)",border:"1px solid rgba(96,165,250,0.2)",borderRadius:"8px",marginBottom:"14px"}}>
+    <div style={{padding:"16px 20px",background:"#eff6ff",border:"1px solid #bfdbfe",borderRadius:"8px",marginBottom:"14px"}}>
       <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:"12px"}}>
-        <div style={{fontSize:"12px",color:"#60a5fa",fontWeight:600,letterSpacing:"0.05em"}}>BATCH MODE — ANTHROPIC BATCH API</div>
+        <div style={{fontSize:"12px",color:C.blue,fontWeight:600,letterSpacing:"0.05em"}}>BATCH MODE — ANTHROPIC BATCH API</div>
         <button onClick={onToggleOff} style={{...S.ghost,fontSize:"10px",padding:"2px 8px"}}>switch to instant</button>
       </div>
       <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:"12px",marginBottom:"12px"}}>
-        <div style={{textAlign:"center",padding:"10px",background:C.surface,borderRadius:"6px",border:`1px solid ${C.borderDim}`}}>
-          <div style={{fontSize:"18px",color:"#60a5fa",fontWeight:700,marginBottom:"2px"}}>{fmt$(batchTotal)}</div>
+        <div style={{textAlign:"center",padding:"10px",background:C.surface,borderRadius:"6px",border:`1px solid ${C.border}`}}>
+          <div style={{fontSize:"18px",color:C.blue,fontWeight:700,marginBottom:"2px"}}>{fmt$(batchTotal)}</div>
           <div style={{fontSize:"10px",color:C.muted,textTransform:"uppercase",letterSpacing:"0.1em"}}>Batch total</div>
           {aux>0&&<div style={{fontSize:"10px",color:C.faint,marginTop:"4px"}}>Haiku {fmt$(haikuBatch)} + APIs {fmt$(aux)}</div>}
         </div>
-        <div style={{textAlign:"center",padding:"10px",background:C.surface,borderRadius:"6px",border:`1px solid ${C.borderDim}`}}>
-          <div style={{fontSize:"18px",color:"#4ade80",fontWeight:700,marginBottom:"2px"}}>-{savingsPct}%</div>
+        <div style={{textAlign:"center",padding:"10px",background:C.surface,borderRadius:"6px",border:`1px solid ${C.border}`}}>
+          <div style={{fontSize:"18px",color:C.green,fontWeight:700,marginBottom:"2px"}}>-{savingsPct}%</div>
           <div style={{fontSize:"10px",color:C.muted,textTransform:"uppercase",letterSpacing:"0.1em"}}>Haiku savings (instant Haiku {fmt$(haikuSync)})</div>
         </div>
-        <div style={{textAlign:"center",padding:"10px",background:C.surface,borderRadius:"6px",border:`1px solid ${C.borderDim}`}}>
-          <div style={{fontSize:"18px",color:"#fb923c",fontWeight:700,marginBottom:"2px"}}>≤24h</div>
+        <div style={{textAlign:"center",padding:"10px",background:C.surface,borderRadius:"6px",border:`1px solid ${C.border}`}}>
+          <div style={{fontSize:"18px",color:"#ea580c",fontWeight:700,marginBottom:"2px"}}>≤24h</div>
           <div style={{fontSize:"10px",color:C.muted,textTransform:"uppercase",letterSpacing:"0.1em"}}>Processing time</div>
         </div>
       </div>
@@ -261,13 +264,13 @@ function ProgressBar({done,total,current,mode}) {
     <div style={{...S.card,marginBottom:"20px"}}>
       <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:"10px"}}>
         <div style={{fontSize:"13px",color:C.text,display:"flex",alignItems:"center",gap:"8px",fontWeight:500}}>
-          <Spinner size={10} color={isBatch?"#fb923c":"#60a5fa"}/>
+          <Spinner size={10} color={isBatch?"#ea580c":C.blue}/>
           <span>{isBatch?"Batch processing (Anthropic API)…":"Scoring claims in real-time…"}</span>
         </div>
         <span style={{fontSize:"13px",color:C.text,fontWeight:700}}>{done}/{total} · {pct}%</span>
       </div>
-      <div style={{background:"#2a3548",borderRadius:"4px",height:"8px",overflow:"hidden",marginBottom:"8px",border:"1px solid #3d5168"}}>
-        <div style={{height:"100%",width:`${pct}%`,background:isBatch?"linear-gradient(90deg,#c2410c,#fb923c)":"linear-gradient(90deg,#1d4ed8,#60a5fa)",transition:"width 0.4s ease",borderRadius:"4px"}}/>
+      <div style={{background:C.borderDim,borderRadius:"4px",height:"8px",overflow:"hidden",marginBottom:"8px",border:`1px solid ${C.border}`}}>
+        <div style={{height:"100%",width:`${pct}%`,background:isBatch?"linear-gradient(90deg,#c2410c,#ea580c)":"linear-gradient(90deg,#1d4ed8,#2563eb)",transition:"width 0.4s ease",borderRadius:"4px"}}/>
       </div>
       {current&&<div style={{fontSize:"12px",color:C.secondary,fontStyle:"italic",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>→ {current}</div>}
       {isBatch&&<div style={{marginTop:"8px",fontSize:"12px",color:C.muted}}>Keep this tab open to watch progress. Finished runs appear under Past fact-checks.</div>}
@@ -357,7 +360,7 @@ function HistoryPanel({token,onLoad,refreshKey}) {
                           autoFocus
                           placeholder="Enter a name for this run…"
                           style={{...S.input,padding:"4px 8px",fontSize:"12px",flex:1}}/>
-                        <button onClick={()=>saveLabel(run.id)} style={{...S.ghost,fontSize:"11px",padding:"3px 8px",color:"#4ade80",borderColor:"#4ade80"}}>save</button>
+                        <button onClick={()=>saveLabel(run.id)} style={{...S.ghost,fontSize:"11px",padding:"3px 8px",color:C.green,borderColor:C.green}}>save</button>
                         <button onClick={()=>setEditing(null)} style={{...S.ghost,fontSize:"11px",padding:"3px 8px"}}>cancel</button>
                       </div>
                     ) : (
@@ -370,17 +373,17 @@ function HistoryPanel({token,onLoad,refreshKey}) {
                     <div style={{display:"flex",gap:"6px",alignItems:"center",flexWrap:"wrap",marginTop:"2px"}}>
                       <span style={{fontSize:"12px",color:C.muted}}>{fmtDateFull(run.created_at)}</span>
                       <span style={{fontSize:"10px",color:C.faint}}>·</span>
-                      <span style={{fontSize:"12px",color:run.mode==="batch"?"#fb923c":"#60a5fa",fontWeight:600}}>{run.mode}</span>
+                      <span style={{fontSize:"12px",color:run.mode==="batch"?"#ea580c":C.blue,fontWeight:600}}>{run.mode}</span>
                       <span style={{fontSize:"10px",color:C.faint}}>·</span>
                       <span style={{fontSize:"12px",color:C.secondary}}>{run.claims?.length||0} claims</span>
-                      {flagged>0&&<><span style={{fontSize:"10px",color:C.faint}}>·</span><span style={{fontSize:"12px",color:"#f87171",fontWeight:600}}>{flagged} flagged</span></>}
+                      {flagged>0&&<><span style={{fontSize:"10px",color:C.faint}}>·</span><span style={{fontSize:"12px",color:"#dc2626",fontWeight:600}}>{flagged} flagged</span></>}
                       {run.filename&&!run.label&&<><span style={{fontSize:"10px",color:C.faint}}>·</span><span style={{fontSize:"12px",color:C.muted}}>📄 {run.filename}</span></>}
                     </div>
                   </div>
 
                   {/* Right side: cost + rename + delete */}
                   <div style={{display:"flex",flexDirection:"column",alignItems:"flex-end",gap:"4px",flexShrink:0}}>
-                    <span style={{fontSize:"13px",color:"#4ade80",fontWeight:700}}>{fmt$(run.cost?.exact_cost_usd||0)}</span>
+                    <span style={{fontSize:"13px",color:C.green,fontWeight:700}}>{fmt$(run.cost?.exact_cost_usd||0)}</span>
                     {!isEditing&&(
                       <div style={{display:"flex",gap:"4px"}}>
                         <button onClick={e=>{e.stopPropagation();setEditing(run.id);setEditVal(run.label||"");}}
@@ -388,7 +391,7 @@ function HistoryPanel({token,onLoad,refreshKey}) {
                           rename
                         </button>
                         <button onClick={e=>{e.stopPropagation();deleteRun(run.id);}}
-                          style={{...S.ghost,fontSize:"10px",padding:"2px 6px",color:"#f87171",borderColor:"rgba(248,113,113,0.3)"}}>
+                          style={{...S.ghost,fontSize:"10px",padding:"2px 6px",color:"#dc2626",borderColor:"#fca5a5"}}>
                           del
                         </button>
                       </div>
@@ -470,7 +473,7 @@ function ClaimsView({claims,input,lastCost,fromHistory}) {
                 </div>
               </div>
               {c.sources?.length>0&&(
-                <div style={{marginTop:"10px",paddingTop:"10px",borderTop:"1px solid #131926"}}>
+                <div style={{marginTop:"10px",paddingTop:"10px",borderTop:`1px solid ${C.borderDim}`}}>
                   <div style={{fontSize:"11px",color:C.label,fontWeight:700,letterSpacing:"0.08em",textTransform:"uppercase",marginBottom:"6px"}}>Sources ({c.sources.length})</div>
                   <div style={{display:"flex",flexDirection:"column",gap:"6px"}}>
                     {c.sources.map((s,j)=>(
@@ -478,7 +481,7 @@ function ClaimsView({claims,input,lastCost,fromHistory}) {
                         <span style={{fontSize:"11px",color:C.muted,paddingTop:"3px",flexShrink:0}}>↗</span>
                         <div>
                           <a href={s.url} target="_blank" rel="noreferrer"
-                            style={{fontSize:"12px",color:"#60a5fa",textDecoration:"none",display:"block",lineHeight:"1.4"}}
+                            style={{fontSize:"12px",color:C.link,textDecoration:"none",display:"block",lineHeight:"1.4"}}
                             onMouseEnter={e=>e.target.style.textDecoration="underline"}
                             onMouseLeave={e=>e.target.style.textDecoration="none"}>
                             {s.title}
@@ -745,22 +748,22 @@ export default function App() {
 
   const isLarge=input.length>3000;
   const estPill = estimate&&(
-    <span style={{fontSize:"12px",color:C.muted,background:C.surfaceHi,border:`1px solid ${C.border}`,borderRadius:"20px",padding:"5px 14px",display:"inline-flex",alignItems:"center",gap:"6px"}}
+    <span style={{fontSize:"12px",color:C.secondary,background:C.surfaceHi,border:`1px solid ${C.border}`,borderRadius:"20px",padding:"5px 14px",display:"inline-flex",alignItems:"center",gap:"6px"}}
       title={estimate.aux_costs?.length?auxCostTitle(estimate.aux_costs):undefined}>
-      <span style={{width:6,height:6,borderRadius:"50%",background:"#60a5fa",display:"inline-block"}}/>
-      ~{estimate.estimated_claims} claims · <span style={{color:"#93c5fd",fontWeight:700}}>{fmt$(batch?estimate.est_cost_batch_usd:estimate.est_cost_usd)}</span>
+      <span style={{width:6,height:6,borderRadius:"50%",background:C.blue,display:"inline-block"}}/>
+      ~{estimate.estimated_claims} claims · <span style={{color:C.blue,fontWeight:700}}>{fmt$(batch?estimate.est_cost_batch_usd:estimate.est_cost_usd)}</span>
       {(estimate.est_aux_cost_usd||0)>0.00001&&<span style={{color:C.muted}}>(Haiku {fmt$(haikuFromEstimate(estimate))} + APIs {fmt$(estimate.est_aux_cost_usd)})</span>}
       {(estimate.est_aux_cost_usd||0)<=0.00001&&estimate.aux_costs?.some(l=>l.note)&&<span style={{color:C.muted}}>(APIs free tier)</span>}
     </span>
   );
 
   return (
-    <div style={{minHeight:"100vh",background:"#0f1419",fontFamily:"'DM Mono','Fira Mono','Courier New',monospace",color:C.text}}>
+    <div style={{minHeight:"100vh",background:C.page,fontFamily:"'DM Mono','Fira Mono','Courier New',monospace",color:C.text}}>
       <style>{`
         @keyframes spin{to{transform:rotate(360deg)}}
         @keyframes fadeIn{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
         input[type=file]{display:none}
-        textarea::placeholder,input::placeholder{color:#8fa3bb;opacity:1}
+        textarea::placeholder,input::placeholder{color:${C.faint};opacity:1}
       `}</style>
 
       <CostBar allTimeCost={allTimeCost} allTimeIn={allTimeIn} allTimeOut={allTimeOut} sessionCost={sessionCost} sessionRuns={sessionRuns}/>
@@ -792,7 +795,7 @@ export default function App() {
           <div onDragOver={e=>e.preventDefault()}
             onDrop={e=>{e.preventDefault();const f=e.dataTransfer.files?.[0];if(f){const dt=new DataTransfer();dt.items.add(f);fileRef.current.files=dt.files;handleFileChange({target:{files:dt.files}});}}}
             style={{border:`1px solid ${C.borderDim}`,borderRadius:"8px",background:C.surface}}>
-            {fileName&&<div style={{padding:"8px 18px 0",fontSize:"12px",color:"#4ade80",display:"flex",alignItems:"center",gap:"6px"}}>
+            {fileName&&<div style={{padding:"8px 18px 0",fontSize:"12px",color:C.green,display:"flex",alignItems:"center",gap:"6px"}}>
               📄 {fileName}
               <button onClick={()=>{setFileName(null);setInput("");setClaims(null);if(fileRef.current)fileRef.current.value="";}} style={{background:"none",border:"none",color:C.muted,cursor:"pointer",fontSize:"14px",padding:"0 4px"}}>×</button>
             </div>}
@@ -818,15 +821,15 @@ export default function App() {
         ) : (
           <div style={{marginBottom:"14px"}}>
             {isLarge ? (
-              <div style={{padding:"12px 16px",background:"rgba(251,146,60,0.06)",border:"1px solid rgba(251,146,60,0.2)",borderRadius:"8px",display:"flex",alignItems:"center",gap:"12px"}}>
+              <div style={{padding:"12px 16px",background:"#fff7ed",border:"1px solid #fed7aa",borderRadius:"8px",display:"flex",alignItems:"center",gap:"12px"}}>
                 <span style={{fontSize:"14px"}}>⚠</span>
                 <div style={{flex:1,fontSize:"13px",color:C.secondary,lineHeight:1.6}}>
-                  Large document — <span style={{color:"#fb923c"}}>batch mode saves {estimate?`~${fmt$(haikuFromEstimate(estimate)-haikuBatchFromEstimate(estimate))} on Haiku`:"~50% on Haiku"}</span> but takes up to 24h via Anthropic's async API.
+                  Large document — <span style={{color:"#ea580c",fontWeight:600}}>batch mode saves {estimate?`~${fmt$(haikuFromEstimate(estimate)-haikuBatchFromEstimate(estimate))} on Haiku`:"~50% on Haiku"}</span> but takes up to 24h via Anthropic's async API.
                 </div>
-                <Toggle value={batch} onChange={setBatch} label="Use batch" color="#fb923c"/>
+                <Toggle value={batch} onChange={setBatch} label="Use batch" color="#ea580c"/>
               </div>
             ) : (
-              <Toggle value={batch} onChange={setBatch} label={`Batch mode — Anthropic async API · 50% cheaper Haiku · up to 24h${estimate?` · saves ${fmt$(haikuFromEstimate(estimate)-haikuBatchFromEstimate(estimate))}`:""}`} color="#60a5fa"/>
+              <Toggle value={batch} onChange={setBatch} label={`Batch mode — Anthropic async API · 50% cheaper Haiku · up to 24h${estimate?` · saves ${fmt$(haikuFromEstimate(estimate)-haikuBatchFromEstimate(estimate))}`:""}`} color={C.blue}/>
             )}
           </div>
         )}
@@ -834,7 +837,7 @@ export default function App() {
         {/* Analyze button */}
         <div style={{display:"flex",alignItems:"center",gap:"14px",marginBottom:"28px"}}>
           <button onClick={analyze} disabled={loading||fileLoading||!input.trim()}
-            style={{...S.btn,background:loading?"#1e2536":"#1d4ed8",color:loading?"#475569":"#e0eaff",cursor:loading||fileLoading||!input.trim()?"not-allowed":"pointer",opacity:!input.trim()?0.5:1}}>
+            style={{...S.btn,background:loading?C.border:C.blue,color:loading?C.muted:"#ffffff",cursor:loading||fileLoading||!input.trim()?"not-allowed":"pointer",opacity:!input.trim()?0.5:1}}>
             {loading?<><Spinner/>{batch?"Submitting batch…":"Analyzing…"}</>:fileLoading?<><Spinner/>Reading file…</>:"Analyze Claims"}
           </button>
           {lastCost&&!loading&&(
@@ -846,7 +849,7 @@ export default function App() {
           )}
         </div>
 
-        {error&&<div style={{color:"#f87171",fontSize:"13px",marginBottom:"20px",padding:"12px 16px",background:"rgba(248,113,113,0.08)",borderRadius:"6px",border:"1px solid rgba(248,113,113,0.2)"}}>{error}</div>}
+        {error&&<div style={{color:"#b91c1c",fontSize:"13px",marginBottom:"20px",padding:"12px 16px",background:"#fef2f2",borderRadius:"6px",border:"1px solid #fecaca"}}>{error}</div>}
 
         {progress&&<ProgressBar done={progress.done} total={progress.total} current={progress.current} mode={progress.mode}/>}
 

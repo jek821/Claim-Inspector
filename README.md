@@ -1,9 +1,22 @@
 # Claim Inspector
 
-An open-source fact-checking tool: paste or upload text, and each factual claim is checked against reputable sources, scored by risk, and highlighted in the UI. Runs, cumulative spend, and external API usage persist across restarts in `history.json`.
+Open-source fact-checking: paste or upload text, and each factual claim is scored against Wikipedia, OpenAlex, Semantic Scholar, and PubMed.
+
+**The centerpiece is a hybrid RAG retrieval pipeline** — not a thin wrapper around Haiku. Full source text is fetched once per run, chunked and indexed, hybrid-ranked per claim, and only the top passages are sent to the LLM. That keeps Haiku input small and cheap while still grounding scores in whole articles.
+
+| | |
+|---|---|
+| **Chunking** | 750 chars · 150 overlap · merge sources by URL |
+| **Retrieval** | Top **4** passages per claim · 55% Voyage cosine + 45% lexical overlap |
+| **Embeddings** | Voyage `voyage-4-lite` (optional) · `document` / `query` input types |
+| **Cache** | Persistent vectors in `DATA_DIR/corpus/` · skip re-embed on unchanged text |
+| **Dedup** | Per-run HTTP cache — one Wikipedia/OpenAlex/Scholar/PubMed fetch per key |
+
+Set `VOYAGE_API_KEY` for semantic + lexical hybrid search; without it the same pipeline runs **lexical-only** (no embedding cost). Runs, spend, and API usage persist in `history.json`.
 
 ## Table of contents
 
+- [RAG retrieval pipeline](#rag-retrieval-pipeline)
 - [Features](#features)
 - [How it works](#how-it-works)
 - [User interface](#user-interface)
@@ -21,11 +34,109 @@ An open-source fact-checking tool: paste or upload text, and each factual claim 
 
 ---
 
+## RAG retrieval pipeline
+
+Claim Inspector uses a **run-scoped RAG index**: sources are fetched once, split into overlapping chunks, optionally embedded with Voyage, ranked per claim, and only the top passages are sent to Haiku for scoring.
+
+```mermaid
+flowchart TB
+  subgraph fetch [1. Gather sources — once per run]
+    CL[All enriched claims]
+    CL --> FA[FetchAll per claim — parallel]
+    FA --> DEDUP[Per-run HTTP dedup cache]
+    DEDUP --> URL[Merge by URL — keep longest body]
+  end
+
+  subgraph index [2. Build index — AddSources]
+    URL --> CH[Chunk each source\n750 chars · 150 overlap]
+    CH --> CACHE{Disk cache hit?\nDATA_DIR/corpus/}
+    CACHE -->|yes, text unchanged| LOAD[Load stored vectors]
+    CACHE -->|no| VOY[Voyage embed chunks\ninput_type: document]
+    VOY --> SAVE[Save corpus/*.json]
+    LOAD --> IDX[In-memory index\nchunks + vectors + term counts]
+    SAVE --> IDX
+    CH -->|no VOYAGE_API_KEY| LEXONLY[Lexical index only\nterm counts per chunk]
+    LEXONLY --> IDX
+  end
+
+  subgraph retrieve [3. Retrieve per claim — TopK = 4]
+    Q[Query = claim + local context + topic + entities]
+    Q --> QV[Voyage embed query\ninput_type: query]
+    Q --> QT[Lexical token overlap]
+    IDX --> SC[Hybrid score]
+    QV --> SC
+    QT --> SC
+    SC --> TOP[Top 4 passages → Source snippets]
+  end
+
+  subgraph score [4. Score]
+    TOP --> H[Haiku: claim vs 4 passages only]
+    H --> OUT[Risk + explanation + source links]
+  end
+```
+
+### Step-by-step
+
+| Step | What happens | Code |
+|------|----------------|------|
+| **Gather** | For every extracted claim, the fetcher pulls full text from routed providers (Wikipedia extracts, OpenAlex abstracts, etc.). A **per-run cache** deduplicates HTTP calls; results are merged **by URL** (longest body wins). | `api/rag.go` → `gatherAndIndex`, `sources/run_cache.go` |
+| **Chunk** | Each unique source body is split into ~**750-character** passages with **150-character overlap** so facts spanning chunk boundaries are not lost. Bodies under 80 characters are skipped. | `corpus/chunk.go` |
+| **Embed (optional)** | If `VOYAGE_API_KEY` is set, each chunk batch is embedded via Voyage **`voyage-4-lite`** with `input_type: document`. Without a key, the index uses **lexical search only** (no API call). | `retrieval/voyage.go`, `retrieval/index.go` |
+| **Disk cache** | Embeddings are persisted under `DATA_DIR/corpus/` (or `CORPUS_CACHE_DIR`) as `{sha256(url)}.json`. On a cache hit, chunk text must match exactly — otherwise chunks are re-embedded and the file is updated. | `retrieval/store.go` |
+| **Retrieve** | For each claim, a query string is built from claim text, local context, document topic, and extracted entities. With Voyage: embed the query (`input_type: query`), then **hybrid rank** all chunks. Without Voyage: lexical rank only. | `retrieval/index.go` → `Retrieve` |
+| **Hybrid scoring** | When both semantic and lexical signals exist: **55% cosine similarity + 45% lexical overlap**. Semantic-only or lexical-only fallbacks apply when one signal is missing. Top **4** passages (`TopK`) become the `sources[]` passed to Haiku. | `retrieval/lexical.go`, `retrieval/embedder.go` |
+| **Fallback** | If retrieval returns nothing (empty index or zero scores), the fetcher falls back to live `FetchAll` snippets for that claim. | `api/rag.go` → `sourcesForClaim` |
+| **Score** | Haiku receives the claim plus **only those retrieved passages** — not full articles — and returns risk, explanation, and citations. | `scorer/scorer.go` |
+
+### Lexical retrieval
+
+Each chunk is tokenized into lowercase terms (minimum 3 characters, common stopwords removed). The query uses the same tokenizer over claim text, local context, and entity strings. Score is the sum of `queryWeight × docWeight` for matching terms — a simple weighted overlap, not BM25.
+
+### With vs without Voyage
+
+| | **No `VOYAGE_API_KEY`** | **`VOYAGE_API_KEY` set** |
+|---|-------------------------|---------------------------|
+| Indexing | Chunks + term counts only | Chunks + Voyage vectors + term counts |
+| Retrieval | Lexical TopK | Hybrid semantic + lexical TopK |
+| Cost | Free | Voyage embed tokens (200M free tier on lite models) |
+| Cache | N/A | Skips re-embed when corpus JSON matches chunk text |
+| Server log | `Semantic retrieval: lexical only` | `Semantic retrieval: Voyage embeddings enabled` |
+
+Voyage usage is metered in the API usage bar and included in cost estimates when billable.
+
+### What gets stored where
+
+| Storage | Lifetime | Contents |
+|---------|----------|----------|
+| **In-memory index** | Single analyze run | All chunks, vectors (if any), term counts — discarded after the run completes |
+| **`DATA_DIR/corpus/*.json`** | Persistent across runs | Per-URL chunk text + embedding vectors (Voyage only) |
+| **`history.json`** | Persistent | Run results, cumulative cost, API usage counters — not the corpus index |
+
+Re-running a fact-check on a document that hits the same Wikipedia URLs will reuse cached embeddings and only pay Voyage for **new** URLs or changed chunk text.
+
+### Backend packages
+
+```
+backend/internal/
+├── api/rag.go           # gatherAndIndex, sourcesForClaim orchestration
+├── corpus/chunk.go      # Split, ChunkSource, Tokenize
+├── retrieval/
+│   ├── index.go         # Index, AddSources, Retrieve, hybrid scoring
+│   ├── voyage.go        # Voyage API client (voyage-4-lite)
+│   ├── store.go         # Disk cache read/write
+│   ├── lexical.go       # Term overlap scoring
+│   └── embedder.go      # Embedder interface, cosine similarity
+└── sources/             # Wikipedia, OpenAlex, Scholar, PubMed fetchers + run_cache
+```
+
+---
+
 ## Features
 
+- **Hybrid RAG index** — gather → chunk → embed → hybrid retrieve → Haiku scores TopK passages only
 - Extracts atomic factual claims from prose with Claude Haiku
-- Retrieves evidence from Wikipedia, OpenAlex, Semantic Scholar, and PubMed
-- Chunks and indexes source text; optional Voyage semantic search over passages
+- Retrieves full text from Wikipedia, OpenAlex, Semantic Scholar, and PubMed (not just search snippets)
+- Disk-cached Voyage embeddings per source URL; per-run HTTP dedup across claims
 - Scores each claim: verified, low, medium, high, or unverifiable
 - Instant mode (SSE progress) or batch mode (50% off Haiku scoring via Anthropic Batch API)
 - Pre-run cost estimates and post-run breakdown (Haiku + billable OpenAlex/Voyage)
@@ -36,45 +147,17 @@ An open-source fact-checking tool: paste or upload text, and each factual claim 
 
 ## How it works
 
+End-to-end flow: **extract claims (Haiku) → [RAG pipeline](#rag-retrieval-pipeline) → score (Haiku) → save**.
+
 ```mermaid
-flowchart TB
-  subgraph input [Input]
-    T[Text paste or file extract]
-  end
-
-  subgraph phase1 [1. Extract — one Haiku call]
-    T --> E[Document topic, domain, entities]
-    E --> C[Atomic claims + local context + lookup hints]
-  end
-
-  subgraph phase2 [2. Fetch and index]
-    C --> F[Fetch sources per claim]
-    F --> W[Wikipedia full text]
-    F --> OA[OpenAlex abstracts]
-    F --> SS[Semantic Scholar]
-    F --> PM[PubMed]
-    W & OA & SS & PM --> CH[Chunk ~750 chars]
-    CH --> IX[Lexical index + optional Voyage embeddings]
-    IX --> CACHE[Disk cache under DATA_DIR/corpus]
-  end
-
-  subgraph phase3 [3. Score each claim]
-    C --> R[Retrieve top 4 passages]
-    IX --> R
-    R --> H[Haiku scores claim vs passages only]
-    H --> OUT[verified / low / medium / high / unverifiable]
-  end
-
-  subgraph persist [Persistence]
-    OUT --> HIST[history.json — runs, cost, API usage]
-  end
+flowchart LR
+  IN[Input text] --> EXT[Extract claims]
+  EXT --> RAG[RAG index + retrieve TopK]
+  RAG --> SC[Score each claim]
+  SC --> UI[Results + history]
 ```
 
-**Why chunk + retrieve?** Full Wikipedia articles are too long to send to Haiku for every claim. The app indexes the full text once, then pulls only the top **4** passages that match each claim (keyword search, plus **Voyage** semantic search when `VOYAGE_API_KEY` is set).
-
-**Provider routing** — not every database runs for every claim. Extraction assigns `providers` per claim (e.g. PubMed only for medical claims, OpenAlex for research-heavy claims). Wikipedia is almost always included.
-
-**Fetch deduplication** — during indexing, a per-run cache ensures each Wikipedia article, OpenAlex search, Scholar search, and PubMed search is fetched **once**, even when many claims share the same source or query.
+**Provider routing** — extraction assigns `providers` per claim (e.g. PubMed for medical claims, OpenAlex for research-heavy claims). Wikipedia is almost always included. The RAG layer fetches and indexes whatever providers return, then retrieves the best passages per claim regardless of provider mix.
 
 ---
 
@@ -172,7 +255,7 @@ Instant runs have a **180-second server timeout**. Very large documents may need
 | Red | High | Sources contradict or show a major error |
 | Gray | Unverifiable | No on-topic source addresses the claim |
 
-**Claim cards** — explanation plus **Sources** links. Each source is a retrieved *passage* (not necessarily the whole article), labeled with provider (`wikipedia`, `openalex`, `semantic_scholar`, `pubmed`).
+**Claim cards** — explanation plus **Sources** links. Each source is a **retrieved passage** from the RAG index (typically one of four ~750-char chunks), not the full article — labeled with provider (`wikipedia`, `openalex`, `semantic_scholar`, `pubmed`).
 
 ---
 
@@ -197,7 +280,7 @@ Strip headers, footers, and page numbers before upload when possible — they ad
 | Backend | Go 1.22+, stdlib only (no third-party Go modules) |
 | Frontend | React 18 + Vite |
 | Reasoning | Claude Haiku 4.5 (`claude-haiku-4-5-20251001`) |
-| Retrieval | Voyage `voyage-4-lite` embeddings (optional) + lexical search |
+| Retrieval | Hybrid RAG: chunk (750/150) → Voyage `voyage-4-lite` embeddings (optional) → cosine + lexical TopK=4 → Haiku scores passages only |
 | Sources | Wikipedia, OpenAlex, Semantic Scholar, PubMed |
 | Persistence | JSON files under `DATA_DIR` |
 
@@ -209,7 +292,12 @@ Strip headers, footers, and page numbers before upload when possible — they ad
 Claim-Inspector/
 ├── backend/
 │   ├── cmd/server/       # Entry point
-│   ├── internal/         # API, claims, sources, store, …
+│   ├── internal/
+│   │   ├── api/rag.go    # RAG orchestration (gather, index, retrieve)
+│   │   ├── corpus/       # Chunking + tokenization
+│   │   ├── retrieval/    # Voyage embed, disk cache, hybrid rank
+│   │   ├── sources/      # External API fetchers + per-run dedup
+│   │   └── …
 │   └── .env.example
 ├── frontend/
 │   ├── src/App.jsx       # UI
@@ -260,9 +348,9 @@ Copy `backend/.env.example` to `backend/.env` (local) or `/etc/factchecker/.env`
 | `ALLOWED_ORIGIN` | `*` | CORS origin — set to your `https://` domain in production |
 | `PORT` | `8080` | Backend listen port (localhost only in production; nginx proxies public traffic) |
 | `DATA_DIR` | `data` | History, cost, API usage, and corpus cache root |
-| `VOYAGE_API_KEY` | — | [voyageai.com](https://www.voyageai.com) — semantic chunk retrieval (200M free tokens on lite models) |
+| `VOYAGE_API_KEY` | — | [voyageai.com](https://www.voyageai.com) — enables Voyage embeddings in the [RAG pipeline](#rag-retrieval-pipeline) (hybrid semantic + lexical retrieval; 200M free tokens on lite models). Without it, retrieval is lexical-only. |
 | `OPENALEX_API_KEY` | — | [openalex.org/settings/api](https://openalex.org/settings/api) — scholarly search ($1/day free credit). Works without it |
-| `CORPUS_CACHE_DIR` | `DATA_DIR/corpus` | Override embedding cache location |
+| `CORPUS_CACHE_DIR` | `DATA_DIR/corpus` | Directory for RAG embedding cache (`{url-hash}.json` per source) |
 
 ### Frontend
 
@@ -493,10 +581,12 @@ flowchart LR
   HIST --> RUNS[Past runs + claims — max 200]
   HIST --> COST[All-time total billable spend]
   HIST --> API[API usage lifetime + daily]
-  CORPUS --> EMB[Cached Voyage embeddings per source URL]
+  CORPUS --> EMB[RAG embedding cache\nchunk text + Voyage vectors per URL]
 ```
 
-Set `DATA_DIR` to an absolute path on a VPS (e.g. `/var/lib/factchecker`) so redeploying the binary does not wipe history or embedding cache.
+Each **`corpus/*.json`** file stores one source URL’s chunked text and embedding vectors from the [RAG pipeline](#rag-retrieval-pipeline). The in-memory retrieval index itself is **not** persisted — only these embeddings are, to avoid re-calling Voyage for unchanged articles.
+
+Set `DATA_DIR` to an absolute path on a VPS (e.g. `/var/lib/factchecker`) so redeploying the binary does not wipe history or the embedding cache.
 
 ---
 
@@ -553,7 +643,7 @@ Used by the web UI for `.html`, `.docx`, and `.pdf` before analyze.
 
 ### Analyze (one pipeline, three transports)
 
-All analyze routes run **extract → fetch/index → score → save**. They differ in transport and batch vs instant:
+All analyze routes run **extract → gather sources → RAG index → retrieve TopK passages → Haiku score → save**. See [RAG retrieval pipeline](#rag-retrieval-pipeline). They differ in transport and batch vs instant:
 
 | Endpoint | Used by UI? | Behavior |
 |----------|-------------|----------|
