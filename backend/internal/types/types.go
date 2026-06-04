@@ -16,8 +16,9 @@ type EnrichedClaim struct {
 	WikipediaTitle  string   `json:"wikipedia_title,omitempty"`
 	WikiSearchQuery string   `json:"wiki_search_query"`
 	ScholarQuery    string   `json:"scholar_query,omitempty"`
+	OpenAlexQuery   string   `json:"openalex_query,omitempty"`
 	PubMedQuery     string   `json:"pubmed_query,omitempty"`
-	Providers       []string `json:"providers"` // wikipedia, semantic_scholar, pubmed
+	Providers       []string `json:"providers"` // wikipedia, semantic_scholar, openalex, pubmed
 }
 
 // Claim is a single verifiable assertion extracted from the input text.
@@ -30,10 +31,11 @@ type Claim struct {
 
 // Source is a reference document retrieved for a claim.
 type Source struct {
-	Title   string `json:"title"`
-	URL     string `json:"url"`
-	Snippet string `json:"snippet"`
-	Provider string `json:"provider"` // wikipedia | semantic_scholar | arxiv | pubmed
+	Title    string `json:"title"`
+	URL      string `json:"url"`
+	Snippet  string `json:"snippet"`
+	Provider string `json:"provider"` // wikipedia | semantic_scholar | openalex | pubmed
+	Body     string `json:"-"`        // full text for chunking/indexing; not sent to clients
 }
 
 // TokenUsage tracks exact token counts from the Anthropic API.
@@ -117,12 +119,33 @@ type ProgressEvent struct {
 	Current string `json:"current"` // claim text being scored (trimmed)
 }
 
+// APIProviderUsage is one provider's usage vs documented limits.
+type APIProviderUsage struct {
+	ID             string  `json:"id"`
+	DisplayName    string  `json:"display_name"`
+	Unit           string  `json:"unit"`
+	Period         string  `json:"period"`
+	Limit          float64 `json:"limit"`
+	UsedLifetime   float64 `json:"used_lifetime"`
+	UsedDaily      float64 `json:"used_daily"`
+	RemainingDaily float64 `json:"remaining,omitempty"`
+	PctDaily       float64 `json:"pct_used,omitempty"`
+	Note           string  `json:"note,omitempty"`
+}
+
+// APIUsageResponse is returned alongside history totals.
+type APIUsageResponse struct {
+	Providers     []APIProviderUsage `json:"providers"`
+	DailyResetUTC string             `json:"daily_reset_utc"`
+}
+
 // HistoryResponse is returned by GET /history.
 type HistoryResponse struct {
-	Runs           []HistoryRun `json:"runs"`
-	TotalInputTok  int          `json:"total_input_tokens"`
-	TotalOutputTok int          `json:"total_output_tokens"`
-	TotalCostUSD   float64      `json:"total_cost_usd"`
+	Runs           []HistoryRun     `json:"runs"`
+	TotalInputTok  int              `json:"total_input_tokens"`
+	TotalOutputTok int              `json:"total_output_tokens"`
+	TotalCostUSD   float64          `json:"total_cost_usd"`
+	APIUsage       APIUsageResponse `json:"api_usage"`
 }
 
 // HistoryRun is a summary of one past run for the history list.

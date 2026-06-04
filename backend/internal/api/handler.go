@@ -19,8 +19,10 @@ import (
 	"factchecker/internal/pricing"
 	"factchecker/internal/scorer"
 	"factchecker/internal/sources"
+	"factchecker/internal/apilimits"
 	"factchecker/internal/store"
 	"factchecker/internal/types"
+	"factchecker/internal/usage"
 )
 
 const maxUploadBytes = 10 << 20 // 10 MB
@@ -42,26 +44,30 @@ func (s *jobStore) get(id string) (*types.BatchStatusResponse, bool) {
 
 // Handler holds all dependencies for the HTTP API.
 type Handler struct {
-	auth       *auth.Manager
-	extractor  *claims.Extractor
-	fetcher    *sources.Fetcher
-	scorer     *scorer.Scorer
-	batchCli   *batch.Client
-	jobs       *jobStore
-	store      *store.Store
-	maxCostUSD float64 // 0 = unlimited
+	auth            *auth.Manager
+	extractor       *claims.Extractor
+	fetcher         *sources.Fetcher
+	scorer          *scorer.Scorer
+	batchCli        *batch.Client
+	jobs            *jobStore
+	store           *store.Store
+	maxCostUSD      float64 // 0 = unlimited
+	voyageKey       string  // optional; enables semantic chunk retrieval
+	corpusCacheDir  string  // optional; caches embeddings on disk
 }
 
-func NewHandler(authMgr *auth.Manager, anthropicKey string, maxCostUSD float64, st *store.Store) *Handler {
+func NewHandler(authMgr *auth.Manager, anthropicKey, voyageKey, openAlexKey, corpusCacheDir string, maxCostUSD float64, st *store.Store) *Handler {
 	return &Handler{
-		auth:       authMgr,
-		extractor:  claims.NewExtractor(anthropicKey),
-		fetcher:    sources.NewFetcher(anthropicKey),
-		scorer:     scorer.NewScorer(anthropicKey),
-		batchCli:   batch.NewClient(anthropicKey),
-		jobs:       newJobStore(),
-		store:      st,
-		maxCostUSD: maxCostUSD,
+		auth:           authMgr,
+		extractor:      claims.NewExtractor(anthropicKey),
+		fetcher:        sources.NewFetcher(openAlexKey),
+		scorer:         scorer.NewScorer(anthropicKey),
+		batchCli:       batch.NewClient(anthropicKey),
+		jobs:           newJobStore(),
+		store:          st,
+		maxCostUSD:     maxCostUSD,
+		voyageKey:      voyageKey,
+		corpusCacheDir: corpusCacheDir,
 	}
 }
 
@@ -152,7 +158,10 @@ func (h *Handler) History(w http.ResponseWriter, r *http.Request) {
 	}
 	runs := h.store.GetHistory()
 	in, out, total := h.store.GetTotals()
-	resp := types.HistoryResponse{TotalInputTok: in, TotalOutputTok: out, TotalCostUSD: total}
+	resp := types.HistoryResponse{
+		TotalInputTok: in, TotalOutputTok: out, TotalCostUSD: total,
+		APIUsage: h.store.GetAPIUsageReport(),
+	}
 	for _, run := range runs {
 		resp.Runs = append(resp.Runs, types.HistoryRun{
 			ID: run.ID, CreatedAt: run.CreatedAt.Format(time.RFC3339),
@@ -248,8 +257,10 @@ func (h *Handler) AnalyzeStream(w http.ResponseWriter, r *http.Request) {
 		flusher.Flush()
 	}
 
-	ctx, cancel := context.WithTimeout(r.Context(), 120*time.Second)
+	ctx, cancel := context.WithTimeout(r.Context(), 180*time.Second)
 	defer cancel()
+	rec := usage.NewRecorder()
+	ctx = usage.WithRecorder(ctx, rec)
 
 	sendEvent("status", map[string]string{"message": "Extracting claims…"})
 	extracted, err := h.extractor.Extract(ctx, req.Text)
@@ -260,23 +271,30 @@ func (h *Handler) AnalyzeStream(w http.ResponseWriter, r *http.Request) {
 	total := len(extracted.Claims)
 	sendEvent("extracted", map[string]any{"total": total, "topic": extracted.Document.Topic, "domain": extracted.Document.Domain})
 
+	sendEvent("status", map[string]string{"message": "Indexing sources (chunk + retrieve)…"})
+	doc := extracted.Document
+	corpusIdx, err := h.gatherAndIndex(ctx, extracted.Claims, doc)
+	if err != nil {
+		log.Printf("index error: %v", err)
+		sendEvent("error", map[string]string{"message": "Failed to index sources: " + err.Error()}); return
+	}
+
 	results := make([]types.Claim, total)
 	var done atomic.Int32
 	totalInput := extracted.InputTokens; totalOutput := extracted.OutputTokens
 	var mu sync.Mutex
 	progressCh := make(chan types.ProgressEvent, total)
-	doc := extracted.Document
 
 	var wg sync.WaitGroup
 	for i, ec := range extracted.Claims {
 		wg.Add(1)
-		go func(idx int, claim types.EnrichedClaim) {
+		go func(claimIdx int, claim types.EnrichedClaim) {
 			defer wg.Done()
-			srcs := h.fetcher.FetchAll(ctx, claim, doc)
+			srcs := h.sourcesForClaim(ctx, corpusIdx, claim, doc)
 			sr, err := h.scorer.Score(ctx, claim, doc, srcs)
 			if err != nil { sr.Risk = "unverifiable"; sr.Explanation = "Could not complete scoring." }
 			mu.Lock(); totalInput += sr.InputTokens; totalOutput += sr.OutputTokens; mu.Unlock()
-			results[idx] = types.Claim{Text: claim.Text, Risk: sr.Risk, Explanation: sr.Explanation, Sources: srcs}
+			results[claimIdx] = types.Claim{Text: claim.Text, Risk: sr.Risk, Explanation: sr.Explanation, Sources: srcs}
 			n := int(done.Add(1))
 			snippet := claim.Text; if len(snippet) > 60 { snippet = snippet[:60] + "…" }
 			progressCh <- types.ProgressEvent{Done: n, Total: total, Current: snippet}
@@ -291,13 +309,15 @@ func (h *Handler) AnalyzeStream(w http.ResponseWriter, r *http.Request) {
 		Usage: types.TokenUsage{InputTokens: totalInput, OutputTokens: totalOutput},
 		ExactCostUSD: pricing.CalcExact(totalInput, totalOutput),
 	}
-	h.persistRun(req.Text, req.Label, req.FileName, "sync", results, cost)
+	h.persistRun(req.Text, req.Label, req.FileName, "sync", results, cost, rec.Snapshot())
 	sendEvent("done", types.AnalyzeResponse{Claims: results, Cost: cost})
 }
 
 func (h *Handler) processSync(w http.ResponseWriter, text, label, filename string) {
-	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 180*time.Second)
 	defer cancel()
+	rec := usage.NewRecorder()
+	ctx = usage.WithRecorder(ctx, rec)
 
 	extracted, err := h.extractor.Extract(ctx, text)
 	if err != nil {
@@ -305,21 +325,27 @@ func (h *Handler) processSync(w http.ResponseWriter, text, label, filename strin
 		http.Error(w, "failed to extract claims", http.StatusInternalServerError); return
 	}
 
+	doc := extracted.Document
+	corpusIdx, err := h.gatherAndIndex(ctx, extracted.Claims, doc)
+	if err != nil {
+		log.Printf("index error: %v", err)
+		http.Error(w, "failed to index sources", http.StatusInternalServerError); return
+	}
+
 	totalInput := extracted.InputTokens; totalOutput := extracted.OutputTokens
 	var mu sync.Mutex
 	results := make([]types.Claim, len(extracted.Claims))
 	var wg sync.WaitGroup
-	doc := extracted.Document
 
 	for i, ec := range extracted.Claims {
 		wg.Add(1)
-		go func(idx int, claim types.EnrichedClaim) {
+		go func(claimIdx int, claim types.EnrichedClaim) {
 			defer wg.Done()
-			srcs := h.fetcher.FetchAll(ctx, claim, doc)
+			srcs := h.sourcesForClaim(ctx, corpusIdx, claim, doc)
 			sr, err := h.scorer.Score(ctx, claim, doc, srcs)
 			if err != nil { sr.Risk = "unverifiable"; sr.Explanation = "Could not complete scoring." }
 			mu.Lock(); totalInput += sr.InputTokens; totalOutput += sr.OutputTokens; mu.Unlock()
-			results[idx] = types.Claim{Text: claim.Text, Risk: sr.Risk, Explanation: sr.Explanation, Sources: srcs}
+			results[claimIdx] = types.Claim{Text: claim.Text, Risk: sr.Risk, Explanation: sr.Explanation, Sources: srcs}
 		}(i, ec)
 	}
 	wg.Wait()
@@ -329,7 +355,7 @@ func (h *Handler) processSync(w http.ResponseWriter, text, label, filename strin
 		Usage: types.TokenUsage{InputTokens: totalInput, OutputTokens: totalOutput},
 		ExactCostUSD: pricing.CalcExact(totalInput, totalOutput),
 	}
-	h.persistRun(text, label, filename, "sync", results, cost)
+	h.persistRun(text, label, filename, "sync", results, cost, rec.Snapshot())
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(types.AnalyzeResponse{Claims: results, Cost: cost})
 }
@@ -337,8 +363,10 @@ func (h *Handler) processSync(w http.ResponseWriter, text, label, filename strin
 // ── Async Batch API ───────────────────────────────────────────────────────────
 
 func (h *Handler) submitBatch(w http.ResponseWriter, text, label, filename string) {
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 180*time.Second)
 	defer cancel()
+	rec := usage.NewRecorder()
+	ctx = usage.WithRecorder(ctx, rec)
 
 	extracted, err := h.extractor.Extract(ctx, text)
 	if err != nil {
@@ -347,16 +375,16 @@ func (h *Handler) submitBatch(w http.ResponseWriter, text, label, filename strin
 	}
 
 	doc := extracted.Document
-	claimSources := make([][]types.Source, len(extracted.Claims))
-	var wg sync.WaitGroup
-	for i, ec := range extracted.Claims {
-		wg.Add(1)
-		go func(idx int, claim types.EnrichedClaim) {
-			defer wg.Done()
-			claimSources[idx] = h.fetcher.FetchAll(ctx, claim, doc)
-		}(i, ec)
+	corpusIdx, err := h.gatherAndIndex(ctx, extracted.Claims, doc)
+	if err != nil {
+		log.Printf("index error: %v", err)
+		http.Error(w, "failed to index sources", http.StatusInternalServerError); return
 	}
-	wg.Wait()
+
+	claimSources := make([][]types.Source, len(extracted.Claims))
+	for i, ec := range extracted.Claims {
+		claimSources[i] = h.sourcesForClaim(ctx, corpusIdx, ec, doc)
+	}
 
 	requests := make([]batch.Request, len(extracted.Claims))
 	for i, ec := range extracted.Claims {
@@ -382,7 +410,7 @@ func (h *Handler) submitBatch(w http.ResponseWriter, text, label, filename strin
 	for i, c := range extracted.Claims {
 		claimTexts[i] = c.Text
 	}
-	go h.pollBatch(batchID, text, label, filename, claimTexts, claimSources, extracted.InputTokens, extracted.OutputTokens)
+	go h.pollBatch(batchID, text, label, filename, claimTexts, claimSources, extracted.InputTokens, extracted.OutputTokens, rec)
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(types.BatchSubmitResponse{
@@ -403,8 +431,8 @@ func (h *Handler) BatchStatus(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(status)
 }
 
-func (h *Handler) pollBatch(jobID, text, label, filename string, claimTexts []string, claimSources [][]types.Source, extractIn, extractOut int) {
-	ctx := context.Background()
+func (h *Handler) pollBatch(jobID, text, label, filename string, claimTexts []string, claimSources [][]types.Source, extractIn, extractOut int, rec *usage.Recorder) {
+	ctx := usage.WithRecorder(context.Background(), rec)
 	finalStatus, err := h.batchCli.Poll(ctx, jobID, func(succeeded, total int) {
 		progress := 0
 		if total > 0 { progress = succeeded * 100 / total }
@@ -436,8 +464,11 @@ func (h *Handler) pollBatch(jobID, text, label, filename string, claimTexts []st
 			if c.Type == "text" { rawText = c.Text; break }
 		}
 		risk, explanation := h.scorer.ParseScoreText(rawText)
-		totalInput += item.Result.Message.Usage.InputTokens
-		totalOutput += item.Result.Message.Usage.OutputTokens
+		inTok := item.Result.Message.Usage.InputTokens
+		outTok := item.Result.Message.Usage.OutputTokens
+		usage.RecordAnthropicCtx(ctx, inTok, outTok)
+		totalInput += inTok
+		totalOutput += outTok
 		claimsOut[i] = types.Claim{Text: ct, Risk: risk, Explanation: explanation, Sources: claimSources[i]}
 	}
 
@@ -446,7 +477,7 @@ func (h *Handler) pollBatch(jobID, text, label, filename string, claimTexts []st
 		Usage: types.TokenUsage{InputTokens: totalInput, OutputTokens: totalOutput},
 		ExactCostUSD: pricing.CalcExact(totalInput, totalOutput),
 	}
-	h.persistRun(text, label, filename, "batch", claimsOut, *cost)
+	h.persistRun(text, label, filename, "batch", claimsOut, *cost, rec.Snapshot())
 	h.jobs.set(jobID, &types.BatchStatusResponse{
 		BatchID: jobID, Status: "done", Progress: 100,
 		Succeeded: len(claimTexts), Total: len(claimTexts),
@@ -482,7 +513,7 @@ func (h *Handler) readFileUpload(w http.ResponseWriter, r *http.Request) (text, 
 	return
 }
 
-func (h *Handler) persistRun(text, label, filename, mode string, claimsOut []types.Claim, cost types.CostBreakdown) {
+func (h *Handler) persistRun(text, label, filename, mode string, claimsOut []types.Claim, cost types.CostBreakdown, snap map[apilimits.Provider]usage.Counts) {
 	title := strings.TrimSpace(strings.ReplaceAll(text, "\n", " "))
 	if len(title) > 80 { title = title[:80] + "…" }
 	run := store.Run{
@@ -494,6 +525,7 @@ func (h *Handler) persistRun(text, label, filename, mode string, claimsOut []typ
 		Mode:      mode,
 		Claims:    claimsOut,
 		Cost:      cost,
+		APIUsage:  usage.ToStoreMap(snap),
 	}
 	if err := h.store.AddRun(run); err != nil {
 		log.Printf("store error: %v", err)

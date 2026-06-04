@@ -10,9 +10,10 @@ import (
 	"strings"
 
 	"factchecker/internal/types"
+	"factchecker/internal/usage"
 )
 
-const extractSystemPrompt = `You prepare text for automated fact-checking against Wikipedia, Semantic Scholar, and PubMed.
+const extractSystemPrompt = `You prepare text for automated fact-checking against Wikipedia, OpenAlex, Semantic Scholar, and PubMed.
 
 Return ONLY valid JSON (no markdown, no backticks) with this shape:
 {
@@ -29,9 +30,10 @@ Return ONLY valid JSON (no markdown, no backticks) with this shape:
       "entities": ["entities referenced in this claim"],
       "wikipedia_title": "exact English Wikipedia article title when confident, else empty string",
       "wiki_search_query": "short focused phrase for Wikipedia search (include subject + attribute)",
-      "scholar_query": "academic search phrase or empty if not a research/science claim",
+      "scholar_query": "Semantic Scholar search phrase or empty",
+      "openalex_query": "OpenAlex scholarly search phrase or empty",
       "pubmed_query": "PubMed search phrase or empty if not a health/biology/medical claim",
-      "providers": ["wikipedia"] or ["wikipedia","semantic_scholar"] or ["wikipedia","pubmed"], etc.
+      "providers": ["wikipedia"] or ["wikipedia","openalex"] or ["wikipedia","semantic_scholar","openalex"], etc.
     }
   ]
 }
@@ -41,7 +43,10 @@ Rules:
 - Each claim text must be traceable to the original wording.
 - local_context must resolve "it", "they", "this", etc. using surrounding document text.
 - wikipedia_title: only when you are confident (e.g. "World War II", "Mitochondria"). Never guess pop-culture titles unrelated to the document topic.
-- providers: always include "wikipedia". Add "semantic_scholar" only for science/research/technical claims. Add "pubmed" only for medical, health, drug, disease, or clinical biology claims. Do not add scholarly/medical providers for history, geography, or general news unless clearly relevant.
+- providers: always include "wikipedia". Add "openalex" for science, zoology, evolution, animal behavior, ecology, or claims citing research/findings. Add "semantic_scholar" optionally alongside openalex for deep STEM papers. Add "pubmed" only for medical, health, drug, disease, or clinical biology claims.
+- openalex_query: focused phrase for published literature (species + phenomenon, e.g. "Trichobatrachus claw", "frog magnetoreception").
+- wikipedia_title: for species-specific claims use the exact article (e.g. "Hairy frog" for horror frog, not only "Frog"). For general frog biology use "Frog" when appropriate.
+- wiki_search_query: include distinctive terms from the claim (dates, mechanisms, species names) not just the broad topic.
 - Queries must stay on the document topic — do not drift to unrelated subjects.`
 
 type anthropicRequest struct {
@@ -143,6 +148,8 @@ func (e *Extractor) Extract(ctx context.Context, text string) (ExtractResult, er
 		return ExtractResult{}, fmt.Errorf("no claims extracted")
 	}
 
+	usage.RecordAnthropicCtx(ctx, ar.Usage.InputTokens, ar.Usage.OutputTokens)
+
 	return ExtractResult{
 		Document:     payload.Document,
 		Claims:       claims,
@@ -160,6 +167,9 @@ func normalizeClaims(in []types.EnrichedClaim) []types.EnrichedClaim {
 		}
 		if c.WikiSearchQuery == "" {
 			c.WikiSearchQuery = c.Text
+		}
+		if c.OpenAlexQuery == "" {
+			c.OpenAlexQuery = c.ScholarQuery
 		}
 		if len(c.Providers) == 0 {
 			c.Providers = []string{"wikipedia"}

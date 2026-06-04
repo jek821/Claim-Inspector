@@ -75,7 +75,13 @@ function Toggle({value,onChange,label,color="#60a5fa"}) {
   );
 }
 
-// ── Cost bar ──────────────────────────────────────────────────────────────────
+function fmtUsage(n,unit){
+  if(unit==="usd") return fmt$(n);
+  if(unit==="tokens") return fmtTok(Math.round(n));
+  return Math.round(n).toLocaleString();
+}
+
+// ── Cost + API usage bars ─────────────────────────────────────────────────────
 function CostBar({allTimeCost,allTimeIn,allTimeOut,sessionCost,sessionRuns}) {
   return (
     <div style={{background:"#060810",borderBottom:"1px solid #131926",padding:"5px 40px",display:"flex",alignItems:"center",gap:"20px",fontSize:"11px",color:"#334155",fontFamily:"inherit",flexWrap:"wrap"}}>
@@ -85,6 +91,41 @@ function CostBar({allTimeCost,allTimeIn,allTimeOut,sessionCost,sessionRuns}) {
       <span style={{color:"#1e2536",letterSpacing:"0.1em",textTransform:"uppercase"}}>This session</span>
       <span><span style={{color:"#60a5fa",fontWeight:600}}>{fmt$(sessionCost)}</span><span style={{color:"#1a2030",margin:"0 5px"}}>·</span>{sessionRuns} run{sessionRuns!==1?"s":""}</span>
       <span style={{marginLeft:"auto",color:"#0f1520"}}>Haiku 4.5 · $1/$5 per M tokens</span>
+    </div>
+  );
+}
+
+function APIUsageBar({apiUsage}) {
+  if(!apiUsage?.providers?.length) return null;
+  const hot=p=>p.limit>0&&p.pct_used>=80;
+  return (
+    <div style={{background:"#05070c",borderBottom:"1px solid #131926",padding:"8px 40px 10px",fontSize:"10px",color:"#475569"}}>
+      <div style={{display:"flex",alignItems:"center",gap:"10px",marginBottom:"8px",flexWrap:"wrap"}}>
+        <span style={{color:"#1e2536",letterSpacing:"0.1em",textTransform:"uppercase"}}>API usage</span>
+        <span style={{color:"#0f1520"}}>resets daily UTC · persisted in history.json</span>
+        {apiUsage.daily_reset_utc&&<span style={{color:"#0f1520"}}>· day {apiUsage.daily_reset_utc}</span>}
+      </div>
+      <div style={{display:"flex",flexWrap:"wrap",gap:"10px 16px"}}>
+        {apiUsage.providers.map(p=>{
+          const warn=hot(p);
+          const pct=p.limit>0?Math.min(100,p.pct_used||0):0;
+          return (
+            <div key={p.id} style={{minWidth:"140px",maxWidth:"220px",flex:"1 1 140px"}} title={p.note||""}>
+              <div style={{display:"flex",justifyContent:"space-between",marginBottom:"3px",gap:"6px"}}>
+                <span style={{color:warn?"#fb923c":"#64748b",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{p.display_name}</span>
+                <span style={{color:warn?"#fb923c":"#334155",flexShrink:0}}>
+                  {p.limit>0?`${fmtUsage(p.used_daily,p.unit)}/${fmtUsage(p.limit,p.unit)}`:`${fmtUsage(p.used_lifetime,p.unit)}`}
+                </span>
+              </div>
+              {p.limit>0&&(
+                <div style={{height:3,background:"#0d0f14",borderRadius:2,overflow:"hidden"}}>
+                  <div style={{height:"100%",width:`${pct}%`,background:warn?"#fb923c":"#3b82f6",borderRadius:2}}/>
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
     </div>
   );
 }
@@ -380,6 +421,7 @@ export default function App() {
   const [allTimeCost,setAllTimeCost] = useState(0);
   const [allTimeIn,setAllTimeIn]     = useState(0);
   const [allTimeOut,setAllTimeOut]   = useState(0);
+  const [apiUsage,setApiUsage]       = useState(null);
   // Session counters
   const [sessionCost,setSessionCost] = useState(0);
   const [sessionRuns,setSessionRuns] = useState(0);
@@ -393,9 +435,14 @@ export default function App() {
   useEffect(()=>{
     if(!token) return;
     fetch(`${API}/history`,{headers:authH(token)}).then(r=>r.ok?r.json():null).then(d=>{
-      if(d){ setAllTimeCost(d.total_cost_usd||0); setAllTimeIn(d.total_input_tokens||0); setAllTimeOut(d.total_output_tokens||0); }
+      if(d){
+        setAllTimeCost(d.total_cost_usd||0);
+        setAllTimeIn(d.total_input_tokens||0);
+        setAllTimeOut(d.total_output_tokens||0);
+        if(d.api_usage) setApiUsage(d.api_usage);
+      }
     }).catch(()=>{});
-  },[token]);
+  },[token,histRefreshKey]);
 
   // Debounced estimate
   const fetchEst = useCallback(async(text)=>{
@@ -553,6 +600,7 @@ export default function App() {
       `}</style>
 
       <CostBar allTimeCost={allTimeCost} allTimeIn={allTimeIn} allTimeOut={allTimeOut} sessionCost={sessionCost} sessionRuns={sessionRuns}/>
+      <APIUsageBar apiUsage={apiUsage}/>
 
       {/* Header */}
       <div style={{borderBottom:"1px solid #1e2536",padding:"20px 40px",display:"flex",alignItems:"center",gap:"14px"}}>

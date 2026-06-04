@@ -11,14 +11,17 @@ import (
 
 	"factchecker/internal/batch"
 	"factchecker/internal/types"
+	"factchecker/internal/usage"
 )
 
 const scoreSystemPrompt = `You are a fact-checking assistant. You will be given document context, a factual claim (with local context), and reference sources from Wikipedia and/or academic databases.
 
+Sources are the top retrieved passages from chunked articles (vector + keyword search over full text). Read each passage carefully for dates, mechanisms, and specific facts.
+
 Your job:
 1. Use ONLY the provided sources as evidence. Do NOT use your own training knowledge.
-2. Use the document topic and local context to judge whether sources are on-topic. Ignore sources about unrelated subjects (e.g. TV shows, fiction, unrelated people) even if keyword overlap exists.
-3. If no on-topic source addresses the claim, rate "unverifiable".
+2. Use the document topic and local context to judge whether sources are on-topic. Ignore sources about unrelated subjects (e.g. moths when the claim is about frogs).
+3. If no on-topic excerpt contains information about the specific assertion, rate "unverifiable".
 4. Assign a risk level:
    - "verified": on-topic sources directly and clearly support the claim
    - "low": sources mostly support the claim with minor nuance
@@ -80,7 +83,7 @@ func NewScorer(apiKey string) *Scorer {
 func (s *Scorer) BuildParams(claim types.EnrichedClaim, doc types.DocumentContext, srcs []types.Source) batch.MessageParams {
 	return batch.MessageParams{
 		Model:     "claude-haiku-4-5-20251001",
-		MaxTokens: 200,
+		MaxTokens: 280,
 		System:    scoreSystemPrompt,
 		Messages:  []batch.Message{{Role: "user", Content: buildUserMsg(claim, doc, srcs)}},
 	}
@@ -104,7 +107,7 @@ func (s *Scorer) ParseScoreText(text string) (risk, explanation string) {
 func (s *Scorer) Score(ctx context.Context, claim types.EnrichedClaim, doc types.DocumentContext, srcs []types.Source) (ScoreResult, error) {
 	body, _ := json.Marshal(anthropicRequest{
 		Model:     "claude-haiku-4-5-20251001",
-		MaxTokens: 200,
+		MaxTokens: 280,
 		System:    scoreSystemPrompt,
 		Messages:  []anthropicMessage{{Role: "user", Content: buildUserMsg(claim, doc, srcs)}},
 	})
@@ -138,6 +141,7 @@ func (s *Scorer) Score(ctx context.Context, claim types.EnrichedClaim, doc types
 	}
 
 	risk, explanation := s.ParseScoreText(ar.Content[0].Text)
+	usage.RecordAnthropicCtx(ctx, ar.Usage.InputTokens, ar.Usage.OutputTokens)
 	return ScoreResult{
 		Risk:         risk,
 		Explanation:  explanation,

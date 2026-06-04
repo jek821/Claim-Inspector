@@ -11,8 +11,8 @@ const (
 	TokensPerWord = 1.4
 	// Average words per page
 	WordsPerPage = 250
-	// Overhead tokens: system prompt + source snippets per claim call
-	OverheadPerClaimInput = 600
+	// Overhead tokens: system prompt + longer Wikipedia excerpts per claim call
+	OverheadPerClaimInput = 1200
 	// Output tokens per claim score
 	OutputPerClaim = 150
 	// Average claims per 100 words of input

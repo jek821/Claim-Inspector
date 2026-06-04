@@ -55,8 +55,25 @@ func main() {
 	if err != nil { log.Fatalf("failed to open store at %s: %v", storePath, err) }
 	log.Printf("Store loaded from %s", storePath)
 
+	voyageKey := os.Getenv("VOYAGE_API_KEY")
+	openAlexKey := os.Getenv("OPENALEX_API_KEY")
+	corpusCache := os.Getenv("CORPUS_CACHE_DIR")
+	if corpusCache == "" {
+		corpusCache = filepath.Join(dataDir, "corpus")
+	}
+	if voyageKey != "" {
+		log.Printf("Semantic retrieval: Voyage embeddings enabled")
+	} else {
+		log.Printf("Semantic retrieval: lexical only (set VOYAGE_API_KEY for vector search)")
+	}
+	if openAlexKey != "" {
+		log.Printf("OpenAlex: API key configured")
+	} else {
+		log.Printf("OpenAlex: no API key (limited; get free key at openalex.org/settings/api)")
+	}
+
 	authMgr := auth.NewManager(username, password)
-	handler := api.NewHandler(authMgr, anthropicKey, maxCostUSD, st)
+	handler := api.NewHandler(authMgr, anthropicKey, voyageKey, openAlexKey, corpusCache, maxCostUSD, st)
 
 	mux := http.NewServeMux()
 	handler.RegisterRoutes(mux)
