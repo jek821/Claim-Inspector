@@ -12,19 +12,30 @@ const RISK = {
 
 const API = import.meta.env.VITE_API_URL ?? "http://localhost:8080";
 
-// Readable contrast on dark backgrounds (avoid #1e2536 / #0f1520 for text)
+// High-contrast palette — avoid dark-on-dark text
 const C = {
-  text:      "#e8edf4",
-  secondary: "#b8c5d6",
-  muted:     "#94a3b8",
-  faint:     "#7c8da3",
-  label:     "#a8b8cc",
-  border:    "#3d4f66",
-  borderDim: "#2a3548",
-  surface:   "#141820",
-  surfaceHi: "#1a2030",
-  bar:       "#10141c",
+  text:      "#f8fafc",
+  secondary: "#dbeafe",
+  muted:     "#b8c9dc",
+  faint:     "#8fa3bb",
+  label:     "#e2e8f0",
+  border:    "#5a6d85",
+  borderDim: "#3d5168",
+  surface:   "#1a2230",
+  surfaceHi: "#222d3f",
+  bar:       "#141c28",
+  barApi:    "#182030",
 };
+
+// Shown when /history has not returned api_usage yet (older backend or first paint)
+const DEFAULT_API_PROVIDERS = [
+  { id:"anthropic", display_name:"Anthropic (Haiku)", unit:"tokens", period:"none", limit:0, used_lifetime:0, used_daily:0, pct_used:0, note:"Pay-as-you-go tokens" },
+  { id:"voyage", display_name:"Voyage Embeddings", unit:"tokens", period:"account", limit:200000000, used_lifetime:0, used_daily:0, pct_used:0, note:"200M token free tier" },
+  { id:"openalex", display_name:"OpenAlex API", unit:"usd", period:"daily", limit:1, used_lifetime:0, used_daily:0, pct_used:0, note:"$1/day free credit" },
+  { id:"wikipedia", display_name:"Wikipedia API", unit:"requests", period:"daily", limit:5000, used_lifetime:0, used_daily:0, pct_used:0, note:"Soft daily budget" },
+  { id:"semantic_scholar", display_name:"Semantic Scholar", unit:"requests", period:"daily", limit:5000, used_lifetime:0, used_daily:0, pct_used:0, note:"Soft daily budget" },
+  { id:"pubmed", display_name:"PubMed (NCBI)", unit:"requests", period:"daily", limit:10000, used_lifetime:0, used_daily:0, pct_used:0, note:"Soft daily budget" },
+];
 
 function fmt$(n) { if(n<0.0001)return"<$0.0001"; return`$${n.toFixed(4)}`; }
 function fmtTok(n) { return n>=1000?`${(n/1000).toFixed(1)}k`:String(n); }
@@ -73,10 +84,10 @@ function Spinner({size=12,color="#94a3b8"}) {
 // ── Shared styles ─────────────────────────────────────────────────────────────
 const S = {
   label: {fontSize:"12px",letterSpacing:"0.1em",color:C.label,fontWeight:600,textTransform:"uppercase",display:"block",marginBottom:"6px"},
-  input: {width:"100%",background:"#0d0f14",border:`1px solid ${C.border}`,borderRadius:"6px",color:C.text,fontSize:"14px",padding:"10px 12px",outline:"none",fontFamily:"inherit",boxSizing:"border-box"},
-  btn:   {background:"#1d4ed8",color:"#e0eaff",border:"none",borderRadius:"6px",padding:"11px 24px",fontSize:"13px",fontFamily:"inherit",fontWeight:600,letterSpacing:"0.04em",cursor:"pointer",display:"flex",alignItems:"center",gap:"8px"},
+  input: {width:"100%",background:"#121820",border:`1px solid ${C.border}`,borderRadius:"6px",color:C.text,fontSize:"14px",padding:"10px 12px",outline:"none",fontFamily:"inherit",boxSizing:"border-box"},
+  btn:   {background:"#2563eb",color:"#f8fafc",border:"none",borderRadius:"6px",padding:"11px 24px",fontSize:"13px",fontFamily:"inherit",fontWeight:600,letterSpacing:"0.04em",cursor:"pointer",display:"flex",alignItems:"center",gap:"8px"},
   ghost: {background:C.surfaceHi,border:`1px solid ${C.border}`,color:C.secondary,fontSize:"12px",padding:"5px 12px",borderRadius:"4px",cursor:"pointer",fontFamily:"inherit"},
-  card:  {background:"#0a0c10",border:`1px solid ${C.borderDim}`,borderRadius:"8px",padding:"20px 24px"},
+  card:  {background:C.surface,border:`1px solid ${C.borderDim}`,borderRadius:"8px",padding:"20px 24px",color:C.text},
 };
 
 // ── Login ─────────────────────────────────────────────────────────────────────
@@ -93,11 +104,11 @@ function Login({onLogin}) {
     finally { setLoading(false); }
   }
   return (
-    <div style={{minHeight:"100vh",background:"#0d0f14",display:"flex",alignItems:"center",justifyContent:"center",fontFamily:"'DM Mono','Fira Mono',monospace"}}>
+    <div style={{minHeight:"100vh",background:"#0f1419",display:"flex",alignItems:"center",justifyContent:"center",fontFamily:"'DM Mono','Fira Mono',monospace"}}>
       <div style={{width:360,padding:"40px",...S.card}}>
         <div style={{marginBottom:"32px",textAlign:"center"}}>
           <span style={{fontSize:"11px",letterSpacing:"0.2em",color:C.muted,textTransform:"uppercase"}}>VERIFY</span>
-          <h1 style={{margin:"8px 0 0",fontSize:"22px",fontFamily:"'DM Serif Display',Georgia,serif",color:"#f1f5f9",letterSpacing:"-0.02em"}}>Claim Inspector</h1>
+          <h1 style={{margin:"8px 0 0",fontSize:"22px",fontFamily:"'DM Serif Display',Georgia,serif",color:C.text,letterSpacing:"-0.02em"}}>Claim Inspector</h1>
         </div>
         <div style={{display:"flex",flexDirection:"column",gap:"14px"}}>
           <div><label style={S.label}>Username</label><input value={u} onChange={e=>setU(e.target.value)} autoComplete="username" style={S.input} onKeyDown={e=>e.key==="Enter"&&go()}/></div>
@@ -140,51 +151,61 @@ function CostBar({allTimeCost,allTimeIn,allTimeOut,sessionCost,sessionRuns}) {
     </div>
   );
   return (
-    <div style={{background:C.bar,borderBottom:`1px solid ${C.border}`,padding:"12px 40px",display:"flex",alignItems:"center",gap:"28px",fontSize:"13px",color:C.secondary,flexWrap:"wrap"}}>
+    <div style={{background:C.bar,borderBottom:`1px solid ${C.border}`,padding:"14px 40px",display:"flex",alignItems:"center",gap:"28px",fontSize:"14px",color:C.secondary,flexWrap:"wrap"}}>
       {block("All-time", <>
-        <span style={{color:"#4ade80",fontWeight:700,fontSize:"15px"}}>{fmt$(allTimeCost)}</span>
+        <span style={{color:"#4ade80",fontWeight:700,fontSize:"17px"}}>{fmt$(allTimeCost)}</span>
         <span style={{color:C.faint}}>·</span>
-        <span style={{color:C.text,fontWeight:500}}>{fmtTok(allTimeIn)} in / {fmtTok(allTimeOut)} out</span>
+        <span style={{color:C.text,fontWeight:600}}>{fmtTok(allTimeIn)} in / {fmtTok(allTimeOut)} out</span>
       </>)}
       <span style={{color:C.border,fontSize:"18px",lineHeight:1}}>|</span>
       {block("This session", <>
-        <span style={{color:"#60a5fa",fontWeight:700,fontSize:"15px"}}>{fmt$(sessionCost)}</span>
+        <span style={{color:"#60a5fa",fontWeight:700,fontSize:"17px"}}>{fmt$(sessionCost)}</span>
         <span style={{color:C.faint}}>·</span>
-        <span style={{color:C.text,fontWeight:500}}>{sessionRuns} run{sessionRuns!==1?"s":""}</span>
+        <span style={{color:C.text,fontWeight:600}}>{sessionRuns} run{sessionRuns!==1?"s":""}</span>
       </>)}
-      <span style={{marginLeft:"auto",color:C.muted,fontSize:"12px"}}>Total = Haiku + billable APIs (Voyage · OpenAlex)</span>
+      <span style={{marginLeft:"auto",color:C.muted,fontSize:"13px"}}>Total = Haiku + billable APIs (Voyage · OpenAlex)</span>
     </div>
   );
 }
 
-function APIUsageBar({apiUsage}) {
-  if(!apiUsage?.providers?.length) return null;
-  const hot=p=>p.limit>0&&p.pct_used>=80;
+function APIUsageBar({apiUsage, loading}) {
+  const providers = apiUsage?.providers?.length ? apiUsage.providers : DEFAULT_API_PROVIDERS;
+  const hot = p => p.limit > 0 && (p.pct_used || 0) >= 80;
+  const usedFor = p => p.period === "account" ? (p.used_lifetime || 0) : (p.used_daily ?? p.used_lifetime ?? 0);
+
   return (
-    <div style={{background:"#0c1018",borderBottom:`1px solid ${C.border}`,padding:"12px 40px 14px",fontSize:"12px",color:C.secondary}}>
-      <div style={{display:"flex",alignItems:"center",gap:"12px",marginBottom:"10px",flexWrap:"wrap"}}>
-        <span style={{color:C.label,letterSpacing:"0.08em",textTransform:"uppercase",fontSize:"11px",fontWeight:700}}>API usage</span>
+    <div style={{background:C.barApi,borderBottom:`2px solid #3b82f6`,padding:"14px 40px 16px",fontSize:"13px",color:C.secondary}}>
+      <div style={{display:"flex",alignItems:"center",gap:"12px",marginBottom:"12px",flexWrap:"wrap"}}>
+        <span style={{color:"#93c5fd",letterSpacing:"0.08em",textTransform:"uppercase",fontSize:"12px",fontWeight:700}}>API usage</span>
         <span style={{color:C.muted}}>resets daily UTC · saved in history.json</span>
-        {apiUsage.daily_reset_utc&&<span style={{color:C.faint}}>· {apiUsage.daily_reset_utc}</span>}
+        {apiUsage?.daily_reset_utc && <span style={{color:C.faint}}>· {apiUsage.daily_reset_utc}</span>}
+        {loading && <span style={{color:"#fbbf24",fontSize:"12px"}}>· updating…</span>}
       </div>
-      <div style={{display:"flex",flexWrap:"wrap",gap:"12px 20px"}}>
-        {apiUsage.providers.map(p=>{
-          const warn=hot(p);
-          const pct=p.limit>0?Math.min(100,p.pct_used||0):0;
-          const accent=warn?"#fb923c":"#60a5fa";
+      <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill, minmax(200px, 1fr))",gap:"14px 24px"}}>
+        {providers.map(p => {
+          const warn = hot(p);
+          const pct = p.limit > 0 ? Math.min(100, p.pct_used || 0) : 0;
+          const accent = warn ? "#fb923c" : "#60a5fa";
+          const used = usedFor(p);
           return (
-            <div key={p.id} style={{minWidth:"160px",maxWidth:"240px",flex:"1 1 160px"}} title={p.note||""}>
-              <div style={{display:"flex",justifyContent:"space-between",marginBottom:"5px",gap:"8px",alignItems:"baseline"}}>
-                <span style={{color:warn?"#fdba74":C.text,fontWeight:600,fontSize:"12px",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{p.display_name}</span>
-                <span style={{color:warn?"#fdba74":C.secondary,fontWeight:700,fontSize:"12px",flexShrink:0}}>
-                  {p.limit>0
-                    ? `${fmtUsage(p.period==="account"?p.used_lifetime:p.used_daily,p.unit)}/${fmtUsage(p.limit,p.unit)}`
-                    : `${fmtUsage(p.used_lifetime,p.unit)}`}
+            <div key={p.id} title={p.note || ""}>
+              <div style={{display:"flex",justifyContent:"space-between",marginBottom:"6px",gap:"8px",alignItems:"baseline"}}>
+                <span style={{color: warn ? "#fdba74" : C.text, fontWeight: 700, fontSize: "13px", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap"}}>
+                  {p.display_name}
+                </span>
+                <span style={{color: warn ? "#fdba74" : "#93c5fd", fontWeight: 700, fontSize: "13px", flexShrink: 0}}>
+                  {p.limit > 0
+                    ? `${fmtUsage(used, p.unit)}/${fmtUsage(p.limit, p.unit)}`
+                    : fmtUsage(used, p.unit)}
                 </span>
               </div>
-              {p.limit>0&&(
-                <div style={{height:6,background:"#252a35",borderRadius:3,overflow:"hidden"}}>
-                  <div style={{height:"100%",width:`${Math.max(pct, pct>0?4:0)}%`,background:accent,borderRadius:3,transition:"width 0.3s"}}/>
+              {p.limit > 0 ? (
+                <div style={{height: 10, background: "#2a3548", borderRadius: 5, overflow: "hidden", border: "1px solid #3d5168"}}>
+                  <div style={{height: "100%", width: `${Math.max(pct, pct > 0 ? 6 : 0)}%`, background: accent, borderRadius: 4, transition: "width 0.3s"}}/>
+                </div>
+              ) : (
+                <div style={{height: 10, background: "#2a3548", borderRadius: 5, border: "1px solid #3d5168", display: "flex", alignItems: "center", paddingLeft: 8}}>
+                  <span style={{fontSize: "10px", color: C.muted, letterSpacing: "0.04em"}}>no cap tracked</span>
                 </div>
               )}
             </div>
@@ -211,16 +232,16 @@ function BatchInfoPanel({estimate,onToggleOff}) {
         <button onClick={onToggleOff} style={{...S.ghost,fontSize:"10px",padding:"2px 8px"}}>switch to instant</button>
       </div>
       <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:"12px",marginBottom:"12px"}}>
-        <div style={{textAlign:"center",padding:"10px",background:"#0a0c10",borderRadius:"6px",border:"1px solid #1e2536"}}>
+        <div style={{textAlign:"center",padding:"10px",background:C.surface,borderRadius:"6px",border:`1px solid ${C.borderDim}`}}>
           <div style={{fontSize:"18px",color:"#60a5fa",fontWeight:700,marginBottom:"2px"}}>{fmt$(batchTotal)}</div>
           <div style={{fontSize:"10px",color:C.muted,textTransform:"uppercase",letterSpacing:"0.1em"}}>Batch total</div>
           {aux>0&&<div style={{fontSize:"10px",color:C.faint,marginTop:"4px"}}>Haiku {fmt$(haikuBatch)} + APIs {fmt$(aux)}</div>}
         </div>
-        <div style={{textAlign:"center",padding:"10px",background:"#0a0c10",borderRadius:"6px",border:"1px solid #1e2536"}}>
+        <div style={{textAlign:"center",padding:"10px",background:C.surface,borderRadius:"6px",border:`1px solid ${C.borderDim}`}}>
           <div style={{fontSize:"18px",color:"#4ade80",fontWeight:700,marginBottom:"2px"}}>-{savingsPct}%</div>
           <div style={{fontSize:"10px",color:C.muted,textTransform:"uppercase",letterSpacing:"0.1em"}}>Haiku savings (instant Haiku {fmt$(haikuSync)})</div>
         </div>
-        <div style={{textAlign:"center",padding:"10px",background:"#0a0c10",borderRadius:"6px",border:"1px solid #1e2536"}}>
+        <div style={{textAlign:"center",padding:"10px",background:C.surface,borderRadius:"6px",border:`1px solid ${C.borderDim}`}}>
           <div style={{fontSize:"18px",color:"#fb923c",fontWeight:700,marginBottom:"2px"}}>≤24h</div>
           <div style={{fontSize:"10px",color:C.muted,textTransform:"uppercase",letterSpacing:"0.1em"}}>Processing time</div>
         </div>
@@ -245,7 +266,7 @@ function ProgressBar({done,total,current,mode}) {
         </div>
         <span style={{fontSize:"13px",color:C.text,fontWeight:700}}>{done}/{total} · {pct}%</span>
       </div>
-      <div style={{background:"#252a35",borderRadius:"4px",height:"8px",overflow:"hidden",marginBottom:"8px"}}>
+      <div style={{background:"#2a3548",borderRadius:"4px",height:"8px",overflow:"hidden",marginBottom:"8px",border:"1px solid #3d5168"}}>
         <div style={{height:"100%",width:`${pct}%`,background:isBatch?"linear-gradient(90deg,#c2410c,#fb923c)":"linear-gradient(90deg,#1d4ed8,#60a5fa)",transition:"width 0.4s ease",borderRadius:"4px"}}/>
       </div>
       {current&&<div style={{fontSize:"12px",color:C.secondary,fontStyle:"italic",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>→ {current}</div>}
@@ -324,7 +345,7 @@ function HistoryPanel({token,onLoad,refreshKey}) {
             const flagged=(counts.high||0)+(counts.medium||0);
             const isEditing=editing===run.id;
             return (
-              <div key={run.id} style={{padding:"12px 16px",borderBottom:i<runs.length-1?"1px solid #0d0f14":"none"}}>
+              <div key={run.id} style={{padding:"12px 16px",borderBottom:i<runs.length-1?`1px solid ${C.borderDim}`:"none"}}>
                 <div style={{display:"flex",alignItems:"flex-start",gap:"8px"}}>
 
                   {/* Main clickable area */}
@@ -423,8 +444,8 @@ function ClaimsView({claims,input,lastCost,fromHistory}) {
       {fromHistory&&<div style={{...S.card,fontSize:"13px",color:C.muted,marginBottom:"20px",padding:"12px 16px"}}>Loaded from history — original input text is not stored; claim breakdown below is complete.</div>}
 
       {hasAnnotated&&(
-      <div style={{...S.card,fontSize:"15px",lineHeight:"1.9",marginBottom:"20px"}}>
-        {segments.map((p,i)=>p.type==="plain"?<span key={i}>{p.text}</span>:(
+      <div style={{...S.card,fontSize:"15px",lineHeight:"1.9",marginBottom:"20px",color:C.text}}>
+        {segments.map((p,i)=>p.type==="plain"?<span key={i} style={{color:C.text}}>{p.text}</span>:(
           <span key={i} onClick={()=>setActiveIdx(activeIdx===p.idx?null:p.idx)}
             style={{background:riskStyle(p.risk).bg,borderBottom:`2px solid ${riskStyle(p.risk).border}`,borderRadius:"2px",cursor:"pointer",padding:"1px 2px",outline:activeIdx===p.idx?`2px solid ${riskStyle(p.risk).border}`:"none",outlineOffset:"1px"}}>
             {p.text}
@@ -440,7 +461,7 @@ function ClaimsView({claims,input,lastCost,fromHistory}) {
           const col=RISK[c.risk]??RISK.unverifiable;
           const isActive=activeIdx===i;
           return (
-            <div key={i} style={{border:`1px solid ${isActive?col.border:"#1e2536"}`,borderLeft:`3px solid ${col.border}`,borderRadius:"6px",padding:"12px 16px",background:isActive?col.bg:"#0a0c10",transition:"all 0.15s"}}>
+            <div key={i} style={{border:`1px solid ${isActive?col.border:C.borderDim}`,borderLeft:`3px solid ${col.border}`,borderRadius:"6px",padding:"12px 16px",background:isActive?col.bg:C.surface,transition:"all 0.15s"}}>
               <div style={{display:"flex",alignItems:"flex-start",gap:"10px",cursor:"pointer"}} onClick={()=>setActiveIdx(isActive?null:i)}>
                 <span style={{fontSize:"10px",fontWeight:700,letterSpacing:"0.1em",color:col.dot,textTransform:"uppercase",minWidth:"90px",paddingTop:"2px"}}>{col.label}</span>
                 <div style={{flex:1}}>
@@ -498,6 +519,7 @@ export default function App() {
   const [allTimeIn,setAllTimeIn]     = useState(0);
   const [allTimeOut,setAllTimeOut]   = useState(0);
   const [apiUsage,setApiUsage]       = useState(null);
+  const [apiUsageLoading,setApiUsageLoading] = useState(false);
   // Session counters
   const [sessionCost,setSessionCost] = useState(0);
   const [sessionRuns,setSessionRuns] = useState(0);
@@ -522,14 +544,27 @@ export default function App() {
   // Load all-time totals on login
   useEffect(()=>{
     if(!token) return;
+    setApiUsageLoading(true);
     fetch(`${API}/history`,{headers:authH(token)}).then(r=>r.ok?r.json():null).then(d=>{
       if(d){
         setAllTimeCost(d.total_cost_usd||0);
         setAllTimeIn(d.total_input_tokens||0);
         setAllTimeOut(d.total_output_tokens||0);
-        if(d.api_usage) setApiUsage(d.api_usage);
+        if(d.api_usage?.providers?.length){
+          setApiUsage(d.api_usage);
+        } else {
+          // Merge totals we have into defaults so the bar still shows real Anthropic token counts
+          setApiUsage({
+            daily_reset_utc: new Date().toISOString().slice(0,10),
+            providers: DEFAULT_API_PROVIDERS.map(p =>
+              p.id === "anthropic"
+                ? {...p, used_lifetime: (d.total_input_tokens||0) + (d.total_output_tokens||0), used_daily: (d.total_input_tokens||0) + (d.total_output_tokens||0)}
+                : {...p}
+            ),
+          });
+        }
       }
-    }).catch(()=>{});
+    }).catch(()=>{}).finally(()=>setApiUsageLoading(false));
   },[token,histRefreshKey]);
 
   // Debounced estimate
@@ -710,32 +745,32 @@ export default function App() {
 
   const isLarge=input.length>3000;
   const estPill = estimate&&(
-    <span style={{fontSize:"11px",color:"#94a3b8",background:"#141820",border:`1px solid ${C.border}`,borderRadius:"20px",padding:"4px 12px",display:"inline-flex",alignItems:"center",gap:"6px"}}
+    <span style={{fontSize:"12px",color:C.muted,background:C.surfaceHi,border:`1px solid ${C.border}`,borderRadius:"20px",padding:"5px 14px",display:"inline-flex",alignItems:"center",gap:"6px"}}
       title={estimate.aux_costs?.length?auxCostTitle(estimate.aux_costs):undefined}>
       <span style={{width:6,height:6,borderRadius:"50%",background:"#60a5fa",display:"inline-block"}}/>
-      ~{estimate.estimated_claims} claims · <span style={{color:"#60a5fa",fontWeight:600}}>{fmt$(batch?estimate.est_cost_batch_usd:estimate.est_cost_usd)}</span>
+      ~{estimate.estimated_claims} claims · <span style={{color:"#93c5fd",fontWeight:700}}>{fmt$(batch?estimate.est_cost_batch_usd:estimate.est_cost_usd)}</span>
       {(estimate.est_aux_cost_usd||0)>0.00001&&<span style={{color:C.muted}}>(Haiku {fmt$(haikuFromEstimate(estimate))} + APIs {fmt$(estimate.est_aux_cost_usd)})</span>}
       {(estimate.est_aux_cost_usd||0)<=0.00001&&estimate.aux_costs?.some(l=>l.note)&&<span style={{color:C.muted}}>(APIs free tier)</span>}
     </span>
   );
 
   return (
-    <div style={{minHeight:"100vh",background:"#0d0f14",fontFamily:"'DM Mono','Fira Mono','Courier New',monospace",color:"#e2e8f0"}}>
+    <div style={{minHeight:"100vh",background:"#0f1419",fontFamily:"'DM Mono','Fira Mono','Courier New',monospace",color:C.text}}>
       <style>{`
         @keyframes spin{to{transform:rotate(360deg)}}
         @keyframes fadeIn{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
         input[type=file]{display:none}
-        textarea::placeholder,input::placeholder{color:#7c8da3;opacity:1}
+        textarea::placeholder,input::placeholder{color:#8fa3bb;opacity:1}
       `}</style>
 
       <CostBar allTimeCost={allTimeCost} allTimeIn={allTimeIn} allTimeOut={allTimeOut} sessionCost={sessionCost} sessionRuns={sessionRuns}/>
-      <APIUsageBar apiUsage={apiUsage}/>
+      <APIUsageBar apiUsage={apiUsage} loading={apiUsageLoading}/>
 
       {/* Header */}
-      <div style={{borderBottom:"1px solid #1e2536",padding:"20px 40px",display:"flex",alignItems:"center",gap:"14px"}}>
+      <div style={{borderBottom:`1px solid ${C.borderDim}`,padding:"20px 40px",display:"flex",alignItems:"center",gap:"14px"}}>
         <span style={{fontSize:"11px",letterSpacing:"0.2em",color:C.muted,textTransform:"uppercase"}}>VERIFY</span>
-        <h1 style={{margin:0,fontSize:"20px",fontWeight:700,fontFamily:"'DM Serif Display',Georgia,serif",color:"#f1f5f9",letterSpacing:"-0.02em"}}>Claim Inspector</h1>
-        <span style={{fontSize:"12px",color:C.secondary,marginLeft:"auto"}}>Wikipedia · OpenAlex · Semantic Scholar · PubMed</span>
+        <h1 style={{margin:0,fontSize:"20px",fontWeight:700,fontFamily:"'DM Serif Display',Georgia,serif",color:C.text,letterSpacing:"-0.02em"}}>Claim Inspector</h1>
+        <span style={{fontSize:"13px",color:C.muted,marginLeft:"auto"}}>Wikipedia · OpenAlex · Semantic Scholar · PubMed</span>
         <button onClick={handleLogout} style={{...S.ghost}}>sign out</button>
       </div>
 
@@ -756,16 +791,16 @@ export default function App() {
           </div>
           <div onDragOver={e=>e.preventDefault()}
             onDrop={e=>{e.preventDefault();const f=e.dataTransfer.files?.[0];if(f){const dt=new DataTransfer();dt.items.add(f);fileRef.current.files=dt.files;handleFileChange({target:{files:dt.files}});}}}
-            style={{border:"1px solid #1e2536",borderRadius:"8px",background:"#0a0c10"}}>
-            {fileName&&<div style={{padding:"8px 18px 0",fontSize:"11px",color:"#4ade80",display:"flex",alignItems:"center",gap:"6px"}}>
+            style={{border:`1px solid ${C.borderDim}`,borderRadius:"8px",background:C.surface}}>
+            {fileName&&<div style={{padding:"8px 18px 0",fontSize:"12px",color:"#4ade80",display:"flex",alignItems:"center",gap:"6px"}}>
               📄 {fileName}
-              <button onClick={()=>{setFileName(null);setInput("");setClaims(null);if(fileRef.current)fileRef.current.value="";}} style={{background:"none",border:"none",color:"#64748b",cursor:"pointer",fontSize:"14px",padding:"0 4px"}}>×</button>
+              <button onClick={()=>{setFileName(null);setInput("");setClaims(null);if(fileRef.current)fileRef.current.value="";}} style={{background:"none",border:"none",color:C.muted,cursor:"pointer",fontSize:"14px",padding:"0 4px"}}>×</button>
             </div>}
             <textarea value={input} onChange={e=>{setInput(e.target.value);setClaims(null);setFileName(null);}} placeholder="Paste text here, or drag & drop a file (.txt, .md, .html, .docx, .pdf)…" rows={8}
-              style={{width:"100%",background:"transparent",border:"none",color:"#cbd5e1",fontSize:"14px",lineHeight:"1.7",padding:"16px 18px",resize:"vertical",outline:"none",fontFamily:"inherit",boxSizing:"border-box"}}/>
+              style={{width:"100%",background:"transparent",border:"none",color:C.text,fontSize:"15px",lineHeight:"1.7",padding:"16px 18px",resize:"vertical",outline:"none",fontFamily:"inherit",boxSizing:"border-box"}}/>
           </div>
-          <div style={{fontSize:"12px",color:C.muted,marginTop:"6px"}}>
-            Supported: <span style={{color:C.secondary}}>.txt .md .html .docx .pdf</span>
+          <div style={{fontSize:"13px",color:C.muted,marginTop:"6px"}}>
+            Supported: <span style={{color:C.secondary,fontWeight:600}}>.txt .md .html .docx .pdf</span>
             <span style={{color:C.faint,margin:"0 8px"}}>·</span>
             <span style={{color:C.faint}}>Scanned PDFs not supported</span>
           </div>
