@@ -44,21 +44,35 @@ type TokenUsage struct {
 	OutputTokens int `json:"output_tokens"`
 }
 
+// AuxCostLine is billable spend for a non-Anthropic API (after free-tier credits).
+type AuxCostLine struct {
+	Provider  string  `json:"provider"`
+	Label     string  `json:"label"`
+	AmountUSD float64 `json:"amount_usd"`
+	Note      string  `json:"note,omitempty"`
+}
+
 // CostBreakdown is the exact cost for a completed analysis.
 type CostBreakdown struct {
-	Model        string     `json:"model"`
-	Usage        TokenUsage `json:"usage"`
-	ExactCostUSD float64    `json:"exact_cost_usd"`
+	Model            string        `json:"model"`
+	Usage            TokenUsage    `json:"usage"`
+	AnthropicCostUSD float64       `json:"anthropic_cost_usd"`
+	ExactCostUSD     float64       `json:"exact_cost_usd"` // anthropic + billable aux APIs
+	AuxCosts         []AuxCostLine `json:"aux_costs,omitempty"`
 }
 
 // CostEstimate is a pre-run estimate based on text length.
 type CostEstimate struct {
-	EstimatedClaims int     `json:"estimated_claims"`
-	EstInputTokens  int     `json:"est_input_tokens"`
-	EstOutputTokens int     `json:"est_output_tokens"`
-	EstCostUSD      float64 `json:"est_cost_usd"`
-	EstCostBatchUSD float64 `json:"est_cost_batch_usd"`
-	Model           string  `json:"model"`
+	EstimatedClaims   int           `json:"estimated_claims"`
+	EstInputTokens    int           `json:"est_input_tokens"`
+	EstOutputTokens   int           `json:"est_output_tokens"`
+	AnthropicCostUSD  float64       `json:"anthropic_cost_usd"`
+	EstAuxCostUSD     float64       `json:"est_aux_cost_usd"`
+	EstCostUSD        float64       `json:"est_cost_usd"`       // total (sync / instant)
+	EstCostBatchUSD   float64       `json:"est_cost_batch_usd"` // total with Haiku batch discount
+	Model             string        `json:"model"`
+	VoyageEnabled     bool          `json:"voyage_enabled"`
+	AuxCosts          []AuxCostLine `json:"aux_costs,omitempty"`
 }
 
 // AnalyzeRequest is the incoming request body for text paste.

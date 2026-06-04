@@ -1,6 +1,11 @@
 // Package pricing holds Anthropic model pricing and cost calculation helpers.
 package pricing
 
+import (
+	"factchecker/internal/types"
+	"factchecker/internal/usage"
+)
+
 const (
 	// Haiku 4.5 pricing (per million tokens, as of May 2026)
 	HaikuInputPerM  = 1.00
@@ -28,6 +33,16 @@ func CalcExact(inputTokens, outputTokens int) float64 {
 	return input + output
 }
 
+// CalcAnthropicUSD returns Haiku cost. Batch mode applies 50% discount to scoring tokens only.
+func CalcAnthropicUSD(extractIn, extractOut, scoreIn, scoreOut int, batchScoring bool) float64 {
+	cost := CalcExact(extractIn, extractOut)
+	scoreCost := CalcExact(scoreIn, scoreOut)
+	if batchScoring {
+		scoreCost *= 0.5
+	}
+	return cost + scoreCost
+}
+
 // EstimateFromText returns a rough pre-run cost estimate.
 func EstimateFromText(text string) (estClaims, estInput, estOutput int, costRegular, costBatch float64) {
 	words := countWords(text)
@@ -47,13 +62,31 @@ func EstimateFromText(text string) (estClaims, estInput, estOutput int, costRegu
 	estInput = extractionInput + scoringInput
 	estOutput = extractionOutput + scoringOutput
 
-	costRegular = CalcExact(estInput, estOutput)
-	// Batch: same token count but Anthropic batch API is 50% off
-	// (sequential mode in our tool doesn't use the batch API yet, just sequential calls;
-	//  true batch API savings would apply if we add that — flag as estimate)
-	costBatch = costRegular * 0.5
+	extractCost := CalcExact(extractionInput, extractionOutput)
+	scoreCost := CalcExact(scoringInput, scoringOutput)
+	costRegular = extractCost + scoreCost
+	costBatch = extractCost + scoreCost*0.5
 
 	return
+}
+
+// EstimateFull returns a pre-run cost estimate including Anthropic and aux APIs.
+func EstimateFull(text string, voyageEnabled bool, voyageLifetime int64, openAlexDailyBefore float64) types.CostEstimate {
+	estClaims, estInput, estOutput, anthropicUSD, anthropicBatchUSD := EstimateFromText(text)
+	aux := usage.EstimateAuxCosts(estClaims, voyageEnabled, voyageLifetime, openAlexDailyBefore)
+	auxUSD := usage.SumAuxUSD(aux)
+	return types.CostEstimate{
+		EstimatedClaims:  estClaims,
+		EstInputTokens:   estInput,
+		EstOutputTokens:  estOutput,
+		AnthropicCostUSD: anthropicUSD,
+		EstAuxCostUSD:    auxUSD,
+		EstCostUSD:       anthropicUSD + auxUSD,
+		EstCostBatchUSD:  anthropicBatchUSD + auxUSD,
+		Model:            ModelName,
+		VoyageEnabled:    voyageEnabled,
+		AuxCosts:         aux,
+	}
 }
 
 func countWords(s string) int {

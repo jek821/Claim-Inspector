@@ -12,9 +12,59 @@ const RISK = {
 
 const API = import.meta.env.VITE_API_URL ?? "http://localhost:8080";
 
+// Readable contrast on dark backgrounds (avoid #1e2536 / #0f1520 for text)
+const C = {
+  text:      "#e8edf4",
+  secondary: "#b8c5d6",
+  muted:     "#94a3b8",
+  faint:     "#7c8da3",
+  label:     "#a8b8cc",
+  border:    "#3d4f66",
+  borderDim: "#2a3548",
+  surface:   "#141820",
+  surfaceHi: "#1a2030",
+  bar:       "#10141c",
+};
+
 function fmt$(n) { if(n<0.0001)return"<$0.0001"; return`$${n.toFixed(4)}`; }
 function fmtTok(n) { return n>=1000?`${(n/1000).toFixed(1)}k`:String(n); }
 function authH(t) { return{"Content-Type":"application/json",Authorization:`Bearer ${t}`}; }
+
+function haikuFromEstimate(est) {
+  if(!est) return 0;
+  if(est.anthropic_cost_usd!=null) return est.anthropic_cost_usd;
+  return (est.est_cost_usd||0)-(est.est_aux_cost_usd||0);
+}
+function haikuBatchFromEstimate(est) {
+  if(!est) return 0;
+  return (est.est_cost_batch_usd||0)-(est.est_aux_cost_usd||0);
+}
+function auxFromCost(cost) {
+  return (cost?.aux_costs||[]).reduce((s,l)=>s+(l.amount_usd||0),0);
+}
+function haikuFromCost(cost) {
+  if(!cost) return 0;
+  return cost.anthropic_cost_usd ?? (cost.exact_cost_usd - auxFromCost(cost));
+}
+function auxCostTitle(lines=[]) {
+  return lines.map(l=>`${l.label}: ${fmt$(l.amount_usd||0)}${l.note?` (${l.note})`:""}`).join("\n");
+}
+
+function CostSummary({cost,label="exact",style={}}) {
+  if(!cost) return null;
+  const total=cost.exact_cost_usd||0;
+  const haiku=haikuFromCost(cost);
+  const aux=auxFromCost(cost);
+  const lines=cost.aux_costs||[];
+  const showSplit=lines.length>0||cost.anthropic_cost_usd!=null;
+  const auxNote=aux<=0.00001&&lines.some(l=>l.note)?" · APIs $0 (free tier)":aux>0.00001?` · APIs ${fmt$(aux)}`:"";
+  return (
+    <span style={style} title={lines.length?auxCostTitle(lines):undefined}>
+      {label}: <span style={{color:"#4ade80",fontWeight:700}}>{fmt$(total)}</span>
+      {showSplit&&<span style={{fontSize:"11px",color:C.muted,marginLeft:"6px"}}>(Haiku {fmt$(haiku)}{auxNote})</span>}
+    </span>
+  );
+}
 
 function Spinner({size=12,color="#94a3b8"}) {
   return <span style={{display:"inline-block",width:size,height:size,border:`2px solid #1e2a3a`,borderTopColor:color,borderRadius:"50%",animation:"spin 0.8s linear infinite",flexShrink:0}}/>;
@@ -22,11 +72,11 @@ function Spinner({size=12,color="#94a3b8"}) {
 
 // ── Shared styles ─────────────────────────────────────────────────────────────
 const S = {
-  label: {fontSize:"11px",letterSpacing:"0.12em",color:"#64748b",textTransform:"uppercase",display:"block",marginBottom:"6px"},
-  input: {width:"100%",background:"#0d0f14",border:"1px solid #1e2536",borderRadius:"6px",color:"#cbd5e1",fontSize:"14px",padding:"10px 12px",outline:"none",fontFamily:"inherit",boxSizing:"border-box"},
+  label: {fontSize:"12px",letterSpacing:"0.1em",color:C.label,fontWeight:600,textTransform:"uppercase",display:"block",marginBottom:"6px"},
+  input: {width:"100%",background:"#0d0f14",border:`1px solid ${C.border}`,borderRadius:"6px",color:C.text,fontSize:"14px",padding:"10px 12px",outline:"none",fontFamily:"inherit",boxSizing:"border-box"},
   btn:   {background:"#1d4ed8",color:"#e0eaff",border:"none",borderRadius:"6px",padding:"11px 24px",fontSize:"13px",fontFamily:"inherit",fontWeight:600,letterSpacing:"0.04em",cursor:"pointer",display:"flex",alignItems:"center",gap:"8px"},
-  ghost: {background:"none",border:"1px solid #1e2a3a",color:"#64748b",fontSize:"11px",padding:"4px 10px",borderRadius:"4px",cursor:"pointer",fontFamily:"inherit"},
-  card:  {background:"#0a0c10",border:"1px solid #1e2536",borderRadius:"8px",padding:"20px 24px"},
+  ghost: {background:C.surfaceHi,border:`1px solid ${C.border}`,color:C.secondary,fontSize:"12px",padding:"5px 12px",borderRadius:"4px",cursor:"pointer",fontFamily:"inherit"},
+  card:  {background:"#0a0c10",border:`1px solid ${C.borderDim}`,borderRadius:"8px",padding:"20px 24px"},
 };
 
 // ── Login ─────────────────────────────────────────────────────────────────────
@@ -46,7 +96,7 @@ function Login({onLogin}) {
     <div style={{minHeight:"100vh",background:"#0d0f14",display:"flex",alignItems:"center",justifyContent:"center",fontFamily:"'DM Mono','Fira Mono',monospace"}}>
       <div style={{width:360,padding:"40px",...S.card}}>
         <div style={{marginBottom:"32px",textAlign:"center"}}>
-          <span style={{fontSize:"11px",letterSpacing:"0.2em",color:"#4a5568",textTransform:"uppercase"}}>VERIFY</span>
+          <span style={{fontSize:"11px",letterSpacing:"0.2em",color:C.muted,textTransform:"uppercase"}}>VERIFY</span>
           <h1 style={{margin:"8px 0 0",fontSize:"22px",fontFamily:"'DM Serif Display',Georgia,serif",color:"#f1f5f9",letterSpacing:"-0.02em"}}>Claim Inspector</h1>
         </div>
         <div style={{display:"flex",flexDirection:"column",gap:"14px"}}>
@@ -66,9 +116,9 @@ function Login({onLogin}) {
 // ── Toggle ────────────────────────────────────────────────────────────────────
 function Toggle({value,onChange,label,color="#60a5fa"}) {
   return (
-    <label style={{display:"flex",alignItems:"center",gap:"8px",cursor:"pointer",fontSize:"12px",color:value?color:"#475569",userSelect:"none"}}>
-      <span style={{display:"inline-block",width:32,height:18,borderRadius:9,background:value?`${color}33`:"#1e2536",border:`1px solid ${value?color:"#334155"}`,position:"relative",transition:"all 0.2s"}} onClick={()=>onChange(!value)}>
-        <span style={{position:"absolute",top:2,left:value?14:2,width:12,height:12,borderRadius:"50%",background:value?color:"#475569",transition:"left 0.2s"}}/>
+    <label style={{display:"flex",alignItems:"center",gap:"8px",cursor:"pointer",fontSize:"13px",color:value?color:C.secondary,userSelect:"none",fontWeight:value?600:400}}>
+      <span style={{display:"inline-block",width:32,height:18,borderRadius:9,background:value?`${color}44`:"#252a35",border:`1px solid ${value?color:C.border}`,position:"relative",transition:"all 0.2s",flexShrink:0}} onClick={()=>onChange(!value)}>
+        <span style={{position:"absolute",top:2,left:value?14:2,width:12,height:12,borderRadius:"50%",background:value?color:C.muted,transition:"left 0.2s"}}/>
       </span>
       {label}
     </label>
@@ -83,14 +133,26 @@ function fmtUsage(n,unit){
 
 // ── Cost + API usage bars ─────────────────────────────────────────────────────
 function CostBar({allTimeCost,allTimeIn,allTimeOut,sessionCost,sessionRuns}) {
+  const block = (title, children) => (
+    <div style={{display:"flex",alignItems:"baseline",gap:"10px",flexWrap:"wrap"}}>
+      <span style={{color:C.label,letterSpacing:"0.08em",textTransform:"uppercase",fontSize:"11px",fontWeight:700,minWidth:"72px"}}>{title}</span>
+      {children}
+    </div>
+  );
   return (
-    <div style={{background:"#060810",borderBottom:"1px solid #131926",padding:"5px 40px",display:"flex",alignItems:"center",gap:"20px",fontSize:"11px",color:"#334155",fontFamily:"inherit",flexWrap:"wrap"}}>
-      <span style={{color:"#1e2536",letterSpacing:"0.1em",textTransform:"uppercase"}}>All-time</span>
-      <span><span style={{color:"#4ade80",fontWeight:600}}>{fmt$(allTimeCost)}</span><span style={{color:"#1a2030",margin:"0 5px"}}>·</span>{fmtTok(allTimeIn)} in / {fmtTok(allTimeOut)} out</span>
-      <span style={{color:"#131926",margin:"0 4px"}}>|</span>
-      <span style={{color:"#1e2536",letterSpacing:"0.1em",textTransform:"uppercase"}}>This session</span>
-      <span><span style={{color:"#60a5fa",fontWeight:600}}>{fmt$(sessionCost)}</span><span style={{color:"#1a2030",margin:"0 5px"}}>·</span>{sessionRuns} run{sessionRuns!==1?"s":""}</span>
-      <span style={{marginLeft:"auto",color:"#0f1520"}}>Haiku 4.5 · $1/$5 per M tokens</span>
+    <div style={{background:C.bar,borderBottom:`1px solid ${C.border}`,padding:"12px 40px",display:"flex",alignItems:"center",gap:"28px",fontSize:"13px",color:C.secondary,flexWrap:"wrap"}}>
+      {block("All-time", <>
+        <span style={{color:"#4ade80",fontWeight:700,fontSize:"15px"}}>{fmt$(allTimeCost)}</span>
+        <span style={{color:C.faint}}>·</span>
+        <span style={{color:C.text,fontWeight:500}}>{fmtTok(allTimeIn)} in / {fmtTok(allTimeOut)} out</span>
+      </>)}
+      <span style={{color:C.border,fontSize:"18px",lineHeight:1}}>|</span>
+      {block("This session", <>
+        <span style={{color:"#60a5fa",fontWeight:700,fontSize:"15px"}}>{fmt$(sessionCost)}</span>
+        <span style={{color:C.faint}}>·</span>
+        <span style={{color:C.text,fontWeight:500}}>{sessionRuns} run{sessionRuns!==1?"s":""}</span>
+      </>)}
+      <span style={{marginLeft:"auto",color:C.muted,fontSize:"12px"}}>Total = Haiku + billable APIs (Voyage · OpenAlex)</span>
     </div>
   );
 }
@@ -99,27 +161,30 @@ function APIUsageBar({apiUsage}) {
   if(!apiUsage?.providers?.length) return null;
   const hot=p=>p.limit>0&&p.pct_used>=80;
   return (
-    <div style={{background:"#05070c",borderBottom:"1px solid #131926",padding:"8px 40px 10px",fontSize:"10px",color:"#475569"}}>
-      <div style={{display:"flex",alignItems:"center",gap:"10px",marginBottom:"8px",flexWrap:"wrap"}}>
-        <span style={{color:"#1e2536",letterSpacing:"0.1em",textTransform:"uppercase"}}>API usage</span>
-        <span style={{color:"#0f1520"}}>resets daily UTC · persisted in history.json</span>
-        {apiUsage.daily_reset_utc&&<span style={{color:"#0f1520"}}>· day {apiUsage.daily_reset_utc}</span>}
+    <div style={{background:"#0c1018",borderBottom:`1px solid ${C.border}`,padding:"12px 40px 14px",fontSize:"12px",color:C.secondary}}>
+      <div style={{display:"flex",alignItems:"center",gap:"12px",marginBottom:"10px",flexWrap:"wrap"}}>
+        <span style={{color:C.label,letterSpacing:"0.08em",textTransform:"uppercase",fontSize:"11px",fontWeight:700}}>API usage</span>
+        <span style={{color:C.muted}}>resets daily UTC · saved in history.json</span>
+        {apiUsage.daily_reset_utc&&<span style={{color:C.faint}}>· {apiUsage.daily_reset_utc}</span>}
       </div>
-      <div style={{display:"flex",flexWrap:"wrap",gap:"10px 16px"}}>
+      <div style={{display:"flex",flexWrap:"wrap",gap:"12px 20px"}}>
         {apiUsage.providers.map(p=>{
           const warn=hot(p);
           const pct=p.limit>0?Math.min(100,p.pct_used||0):0;
+          const accent=warn?"#fb923c":"#60a5fa";
           return (
-            <div key={p.id} style={{minWidth:"140px",maxWidth:"220px",flex:"1 1 140px"}} title={p.note||""}>
-              <div style={{display:"flex",justifyContent:"space-between",marginBottom:"3px",gap:"6px"}}>
-                <span style={{color:warn?"#fb923c":"#64748b",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{p.display_name}</span>
-                <span style={{color:warn?"#fb923c":"#334155",flexShrink:0}}>
-                  {p.limit>0?`${fmtUsage(p.used_daily,p.unit)}/${fmtUsage(p.limit,p.unit)}`:`${fmtUsage(p.used_lifetime,p.unit)}`}
+            <div key={p.id} style={{minWidth:"160px",maxWidth:"240px",flex:"1 1 160px"}} title={p.note||""}>
+              <div style={{display:"flex",justifyContent:"space-between",marginBottom:"5px",gap:"8px",alignItems:"baseline"}}>
+                <span style={{color:warn?"#fdba74":C.text,fontWeight:600,fontSize:"12px",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{p.display_name}</span>
+                <span style={{color:warn?"#fdba74":C.secondary,fontWeight:700,fontSize:"12px",flexShrink:0}}>
+                  {p.limit>0
+                    ? `${fmtUsage(p.period==="account"?p.used_lifetime:p.used_daily,p.unit)}/${fmtUsage(p.limit,p.unit)}`
+                    : `${fmtUsage(p.used_lifetime,p.unit)}`}
                 </span>
               </div>
               {p.limit>0&&(
-                <div style={{height:3,background:"#0d0f14",borderRadius:2,overflow:"hidden"}}>
-                  <div style={{height:"100%",width:`${pct}%`,background:warn?"#fb923c":"#3b82f6",borderRadius:2}}/>
+                <div style={{height:6,background:"#252a35",borderRadius:3,overflow:"hidden"}}>
+                  <div style={{height:"100%",width:`${Math.max(pct, pct>0?4:0)}%`,background:accent,borderRadius:3,transition:"width 0.3s"}}/>
                 </div>
               )}
             </div>
@@ -133,10 +198,12 @@ function APIUsageBar({apiUsage}) {
 // ── Batch info panel ──────────────────────────────────────────────────────────
 function BatchInfoPanel({estimate,onToggleOff}) {
   if(!estimate) return null;
-  const syncCost = estimate.est_cost_usd;
-  const batchCost = estimate.est_cost_batch_usd;
-  const savings = syncCost - batchCost;
-  const savingsPct = syncCost > 0 ? Math.round(savings/syncCost*100) : 50;
+  const aux=estimate.est_aux_cost_usd||0;
+  const batchTotal=estimate.est_cost_batch_usd||0;
+  const haikuSync=haikuFromEstimate(estimate);
+  const haikuBatch=haikuBatchFromEstimate(estimate);
+  const haikuSavings=haikuSync-haikuBatch;
+  const savingsPct=haikuSync>0?Math.round(haikuSavings/haikuSync*100):50;
   return (
     <div style={{padding:"16px 20px",background:"rgba(96,165,250,0.05)",border:"1px solid rgba(96,165,250,0.2)",borderRadius:"8px",marginBottom:"14px"}}>
       <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:"12px"}}>
@@ -145,20 +212,21 @@ function BatchInfoPanel({estimate,onToggleOff}) {
       </div>
       <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:"12px",marginBottom:"12px"}}>
         <div style={{textAlign:"center",padding:"10px",background:"#0a0c10",borderRadius:"6px",border:"1px solid #1e2536"}}>
-          <div style={{fontSize:"18px",color:"#60a5fa",fontWeight:700,marginBottom:"2px"}}>{fmt$(batchCost)}</div>
-          <div style={{fontSize:"10px",color:"#475569",textTransform:"uppercase",letterSpacing:"0.1em"}}>Batch cost</div>
+          <div style={{fontSize:"18px",color:"#60a5fa",fontWeight:700,marginBottom:"2px"}}>{fmt$(batchTotal)}</div>
+          <div style={{fontSize:"10px",color:C.muted,textTransform:"uppercase",letterSpacing:"0.1em"}}>Batch total</div>
+          {aux>0&&<div style={{fontSize:"10px",color:C.faint,marginTop:"4px"}}>Haiku {fmt$(haikuBatch)} + APIs {fmt$(aux)}</div>}
         </div>
         <div style={{textAlign:"center",padding:"10px",background:"#0a0c10",borderRadius:"6px",border:"1px solid #1e2536"}}>
           <div style={{fontSize:"18px",color:"#4ade80",fontWeight:700,marginBottom:"2px"}}>-{savingsPct}%</div>
-          <div style={{fontSize:"10px",color:"#475569",textTransform:"uppercase",letterSpacing:"0.1em"}}>vs instant ({fmt$(syncCost)})</div>
+          <div style={{fontSize:"10px",color:C.muted,textTransform:"uppercase",letterSpacing:"0.1em"}}>Haiku savings (instant Haiku {fmt$(haikuSync)})</div>
         </div>
         <div style={{textAlign:"center",padding:"10px",background:"#0a0c10",borderRadius:"6px",border:"1px solid #1e2536"}}>
           <div style={{fontSize:"18px",color:"#fb923c",fontWeight:700,marginBottom:"2px"}}>≤24h</div>
-          <div style={{fontSize:"10px",color:"#475569",textTransform:"uppercase",letterSpacing:"0.1em"}}>Processing time</div>
+          <div style={{fontSize:"10px",color:C.muted,textTransform:"uppercase",letterSpacing:"0.1em"}}>Processing time</div>
         </div>
       </div>
-      <div style={{fontSize:"11px",color:"#475569",lineHeight:1.7}}>
-        Claims are submitted to Anthropic's asynchronous Batch API. Results are polled every 8 seconds and saved to disk — you can close this tab and return later. In practice batches often complete in minutes, not hours.
+      <div style={{fontSize:"12px",color:C.secondary,lineHeight:1.7}}>
+        Claims are submitted to Anthropic's asynchronous Batch API. While this tab stays open, status is polled every 8 seconds. When complete, results are saved to **Past fact-checks**. If you refresh the page mid-batch, polling stops — check history after a few minutes or wait for the run to finish on the server.
       </div>
     </div>
   );
@@ -171,17 +239,17 @@ function ProgressBar({done,total,current,mode}) {
   return (
     <div style={{...S.card,marginBottom:"20px"}}>
       <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:"10px"}}>
-        <div style={{fontSize:"12px",color:"#94a3b8",display:"flex",alignItems:"center",gap:"8px"}}>
+        <div style={{fontSize:"13px",color:C.text,display:"flex",alignItems:"center",gap:"8px",fontWeight:500}}>
           <Spinner size={10} color={isBatch?"#fb923c":"#60a5fa"}/>
           <span>{isBatch?"Batch processing (Anthropic API)…":"Scoring claims in real-time…"}</span>
         </div>
-        <span style={{fontSize:"11px",color:"#475569"}}>{done}/{total} · {pct}%</span>
+        <span style={{fontSize:"13px",color:C.text,fontWeight:700}}>{done}/{total} · {pct}%</span>
       </div>
-      <div style={{background:"#060810",borderRadius:"4px",height:"6px",overflow:"hidden",marginBottom:"8px"}}>
+      <div style={{background:"#252a35",borderRadius:"4px",height:"8px",overflow:"hidden",marginBottom:"8px"}}>
         <div style={{height:"100%",width:`${pct}%`,background:isBatch?"linear-gradient(90deg,#c2410c,#fb923c)":"linear-gradient(90deg,#1d4ed8,#60a5fa)",transition:"width 0.4s ease",borderRadius:"4px"}}/>
       </div>
-      {current&&<div style={{fontSize:"11px",color:"#334155",fontStyle:"italic",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>→ {current}</div>}
-      {isBatch&&<div style={{marginTop:"8px",fontSize:"10px",color:"#1e2536"}}>Results saved to disk — safe to close tab and return later.</div>}
+      {current&&<div style={{fontSize:"12px",color:C.secondary,fontStyle:"italic",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>→ {current}</div>}
+      {isBatch&&<div style={{marginTop:"8px",fontSize:"12px",color:C.muted}}>Keep this tab open to watch progress. Finished runs appear under Past fact-checks.</div>}
     </div>
   );
 }
@@ -244,13 +312,13 @@ function HistoryPanel({token,onLoad,refreshKey}) {
       <button onClick={toggle} style={{...S.ghost,display:"flex",alignItems:"center",gap:"6px"}}>
         <span style={{fontSize:"13px"}}>{open?"▾":"▸"}</span>
         Past fact-checks
-        {runs!==null&&<span style={{color:"#334155",marginLeft:"2px"}}>({runs.length})</span>}
+        {runs!==null&&<span style={{color:C.muted,marginLeft:"4px",fontWeight:600}}>({runs.length})</span>}
       </button>
 
       {open&&(
         <div style={{marginTop:"10px",...S.card,padding:"0",overflow:"hidden"}}>
-          {loading&&<div style={{padding:"16px",fontSize:"12px",color:"#475569",display:"flex",gap:"8px",alignItems:"center"}}><Spinner size={10}/>Loading…</div>}
-          {runs&&runs.length===0&&<div style={{padding:"16px",fontSize:"12px",color:"#334155"}}>No past runs yet.</div>}
+          {loading&&<div style={{padding:"16px",fontSize:"13px",color:C.secondary,display:"flex",gap:"8px",alignItems:"center"}}><Spinner size={10}/>Loading…</div>}
+          {runs&&runs.length===0&&<div style={{padding:"16px",fontSize:"13px",color:C.muted}}>No past runs yet.</div>}
           {runs&&runs.map((run,i)=>{
             const counts=riskCounts(run.claims);
             const flagged=(counts.high||0)+(counts.medium||0);
@@ -272,26 +340,26 @@ function HistoryPanel({token,onLoad,refreshKey}) {
                         <button onClick={()=>setEditing(null)} style={{...S.ghost,fontSize:"11px",padding:"3px 8px"}}>cancel</button>
                       </div>
                     ) : (
-                      <div style={{fontSize:"13px",color:"#94a3b8",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",marginBottom:"4px"}}>
+                      <div style={{fontSize:"14px",color:C.text,fontWeight:500,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",marginBottom:"4px"}}>
                         {displayName(run)}
                       </div>
                     )}
 
                     {/* Metadata row */}
                     <div style={{display:"flex",gap:"6px",alignItems:"center",flexWrap:"wrap",marginTop:"2px"}}>
-                      <span style={{fontSize:"11px",color:"#475569"}}>{fmtDateFull(run.created_at)}</span>
-                      <span style={{fontSize:"10px",color:"#1e2536"}}>·</span>
-                      <span style={{fontSize:"11px",color:run.mode==="batch"?"#fb923c":"#60a5fa"}}>{run.mode}</span>
-                      <span style={{fontSize:"10px",color:"#1e2536"}}>·</span>
-                      <span style={{fontSize:"11px",color:"#334155"}}>{run.claims?.length||0} claims</span>
-                      {flagged>0&&<><span style={{fontSize:"10px",color:"#1e2536"}}>·</span><span style={{fontSize:"11px",color:"#f87171"}}>{flagged} flagged</span></>}
-                      {run.filename&&!run.label&&<><span style={{fontSize:"10px",color:"#1e2536"}}>·</span><span style={{fontSize:"11px",color:"#334155"}}>📄 {run.filename}</span></>}
+                      <span style={{fontSize:"12px",color:C.muted}}>{fmtDateFull(run.created_at)}</span>
+                      <span style={{fontSize:"10px",color:C.faint}}>·</span>
+                      <span style={{fontSize:"12px",color:run.mode==="batch"?"#fb923c":"#60a5fa",fontWeight:600}}>{run.mode}</span>
+                      <span style={{fontSize:"10px",color:C.faint}}>·</span>
+                      <span style={{fontSize:"12px",color:C.secondary}}>{run.claims?.length||0} claims</span>
+                      {flagged>0&&<><span style={{fontSize:"10px",color:C.faint}}>·</span><span style={{fontSize:"12px",color:"#f87171",fontWeight:600}}>{flagged} flagged</span></>}
+                      {run.filename&&!run.label&&<><span style={{fontSize:"10px",color:C.faint}}>·</span><span style={{fontSize:"12px",color:C.muted}}>📄 {run.filename}</span></>}
                     </div>
                   </div>
 
                   {/* Right side: cost + rename + delete */}
                   <div style={{display:"flex",flexDirection:"column",alignItems:"flex-end",gap:"4px",flexShrink:0}}>
-                    <span style={{fontSize:"11px",color:"#475569"}}>{fmt$(run.cost?.exact_cost_usd||0)}</span>
+                    <span style={{fontSize:"13px",color:"#4ade80",fontWeight:700}}>{fmt$(run.cost?.exact_cost_usd||0)}</span>
                     {!isEditing&&(
                       <div style={{display:"flex",gap:"4px"}}>
                         <button onClick={e=>{e.stopPropagation();setEditing(run.id);setEditVal(run.label||"");}}
@@ -316,7 +384,7 @@ function HistoryPanel({token,onLoad,refreshKey}) {
 }
 
 // ── Claims results ────────────────────────────────────────────────────────────
-function ClaimsView({claims,input,lastCost}) {
+function ClaimsView({claims,input,lastCost,fromHistory}) {
   const [activeIdx,setActiveIdx]=useState(null);
 
   function buildSegments() {
@@ -331,34 +399,42 @@ function ClaimsView({claims,input,lastCost}) {
     return parts;
   }
 
-  const segments=buildSegments();
+  function riskStyle(risk) {
+    return RISK[risk] ?? RISK.unverifiable;
+  }
+
+  const segments=fromHistory?[]:buildSegments();
+  const hasAnnotated=!fromHistory&&segments.some(p=>p.type==="claim");
   const counts=claims.reduce((a,c)=>({...a,[c.risk]:(a[c.risk]||0)+1}),{});
 
   return (
     <div style={{animation:"fadeIn 0.4s ease"}}>
       <div style={{display:"flex",gap:"8px",flexWrap:"wrap",marginBottom:"20px",alignItems:"center"}}>
-        <span style={{fontSize:"11px",color:"#475569",letterSpacing:"0.1em",textTransform:"uppercase",marginRight:"4px"}}>{claims.length} claims</span>
+        <span style={{fontSize:"12px",color:C.label,letterSpacing:"0.1em",textTransform:"uppercase",marginRight:"4px",fontWeight:700}}>{claims.length} claims</span>
         {Object.entries(RISK).map(([key,val])=>counts[key]?(
-          <span key={key} style={{display:"inline-flex",alignItems:"center",gap:"5px",fontSize:"11px",color:val.dot,background:val.bg,border:`1px solid ${val.border}`,borderRadius:"20px",padding:"3px 10px"}}>
+          <span key={key} style={{display:"inline-flex",alignItems:"center",gap:"5px",fontSize:"12px",fontWeight:600,color:val.dot,background:val.bg,border:`1px solid ${val.border}`,borderRadius:"20px",padding:"4px 12px"}}>
             <span style={{width:6,height:6,borderRadius:"50%",background:val.dot,display:"inline-block"}}/>
             {counts[key]} {val.label}
           </span>
         ):null)}
-        {lastCost&&<span style={{marginLeft:"auto",fontSize:"11px",color:"#475569"}}>exact: <span style={{color:"#4ade80"}}>{fmt$(lastCost.exact_cost_usd)}</span></span>}
+        {lastCost&&<span style={{marginLeft:"auto"}}><CostSummary cost={lastCost} label="exact"/></span>}
       </div>
 
-      {/* Annotated text */}
+      {fromHistory&&<div style={{...S.card,fontSize:"13px",color:C.muted,marginBottom:"20px",padding:"12px 16px"}}>Loaded from history — original input text is not stored; claim breakdown below is complete.</div>}
+
+      {hasAnnotated&&(
       <div style={{...S.card,fontSize:"15px",lineHeight:"1.9",marginBottom:"20px"}}>
         {segments.map((p,i)=>p.type==="plain"?<span key={i}>{p.text}</span>:(
           <span key={i} onClick={()=>setActiveIdx(activeIdx===p.idx?null:p.idx)}
-            style={{background:RISK[p.risk]?.bg,borderBottom:`2px solid ${RISK[p.risk]?.border}`,borderRadius:"2px",cursor:"pointer",padding:"1px 2px",outline:activeIdx===p.idx?`2px solid ${RISK[p.risk]?.border}`:"none",outlineOffset:"1px"}}>
+            style={{background:riskStyle(p.risk).bg,borderBottom:`2px solid ${riskStyle(p.risk).border}`,borderRadius:"2px",cursor:"pointer",padding:"1px 2px",outline:activeIdx===p.idx?`2px solid ${riskStyle(p.risk).border}`:"none",outlineOffset:"1px"}}>
             {p.text}
           </span>
         ))}
       </div>
+      )}
 
       {/* Claim cards */}
-      <div style={{fontSize:"11px",letterSpacing:"0.15em",color:"#475569",textTransform:"uppercase",marginBottom:"10px"}}>Claim Breakdown</div>
+      <div style={{fontSize:"12px",letterSpacing:"0.12em",color:C.label,fontWeight:700,textTransform:"uppercase",marginBottom:"10px"}}>Claim Breakdown</div>
       <div style={{display:"flex",flexDirection:"column",gap:"8px"}}>
         {claims.map((c,i)=>{
           const col=RISK[c.risk]??RISK.unverifiable;
@@ -368,17 +444,17 @@ function ClaimsView({claims,input,lastCost}) {
               <div style={{display:"flex",alignItems:"flex-start",gap:"10px",cursor:"pointer"}} onClick={()=>setActiveIdx(isActive?null:i)}>
                 <span style={{fontSize:"10px",fontWeight:700,letterSpacing:"0.1em",color:col.dot,textTransform:"uppercase",minWidth:"90px",paddingTop:"2px"}}>{col.label}</span>
                 <div style={{flex:1}}>
-                  <div style={{fontSize:"13px",color:"#cbd5e1",marginBottom:"4px",lineHeight:"1.5"}}>"{c.text.length>140?c.text.slice(0,140)+"…":c.text}"</div>
-                  <div style={{fontSize:"12px",color:"#64748b",lineHeight:"1.6"}}>{c.explanation}</div>
+                  <div style={{fontSize:"13px",color:C.text,marginBottom:"4px",lineHeight:"1.5"}}>"{c.text.length>140?c.text.slice(0,140)+"…":c.text}"</div>
+                  <div style={{fontSize:"13px",color:C.secondary,lineHeight:"1.6"}}>{c.explanation}</div>
                 </div>
               </div>
               {c.sources?.length>0&&(
                 <div style={{marginTop:"10px",paddingTop:"10px",borderTop:"1px solid #131926"}}>
-                  <div style={{fontSize:"10px",color:"#1e2536",letterSpacing:"0.1em",textTransform:"uppercase",marginBottom:"6px"}}>Sources ({c.sources.length})</div>
+                  <div style={{fontSize:"11px",color:C.label,fontWeight:700,letterSpacing:"0.08em",textTransform:"uppercase",marginBottom:"6px"}}>Sources ({c.sources.length})</div>
                   <div style={{display:"flex",flexDirection:"column",gap:"6px"}}>
                     {c.sources.map((s,j)=>(
                       <div key={j} style={{display:"flex",gap:"8px",alignItems:"flex-start"}}>
-                        <span style={{fontSize:"10px",color:"#1e2536",paddingTop:"3px",flexShrink:0}}>↗</span>
+                        <span style={{fontSize:"11px",color:C.muted,paddingTop:"3px",flexShrink:0}}>↗</span>
                         <div>
                           <a href={s.url} target="_blank" rel="noreferrer"
                             style={{fontSize:"12px",color:"#60a5fa",textDecoration:"none",display:"block",lineHeight:"1.4"}}
@@ -386,7 +462,8 @@ function ClaimsView({claims,input,lastCost}) {
                             onMouseLeave={e=>e.target.style.textDecoration="none"}>
                             {s.title}
                           </a>
-                          {s.snippet&&<div style={{fontSize:"11px",color:"#475569",lineHeight:"1.5",marginTop:"2px"}}>{s.snippet.length>180?s.snippet.slice(0,180)+"…":s.snippet}</div>}
+                          {s.provider&&<span style={{fontSize:"10px",color:C.faint,letterSpacing:"0.06em",textTransform:"uppercase"}}>{s.provider.replace("_"," ")}</span>}
+                          {s.snippet&&<div style={{fontSize:"12px",color:C.muted,lineHeight:"1.5",marginTop:"3px"}}>{s.snippet.length>180?s.snippet.slice(0,180)+"…":s.snippet}</div>}
                         </div>
                       </div>
                     ))}
@@ -415,8 +492,7 @@ export default function App() {
   const [estimate,setEstimate] = useState(null);
   // Progress state
   const [progress,setProgress] = useState(null); // {done,total,current,mode}
-  // Batch async job
-  const [batchJob,setBatchJob] = useState(null);
+  // Batch async job tracked via progress state only
   // Persistent cost totals (loaded from /history on login)
   const [allTimeCost,setAllTimeCost] = useState(0);
   const [allTimeIn,setAllTimeIn]     = useState(0);
@@ -427,9 +503,21 @@ export default function App() {
   const [sessionRuns,setSessionRuns] = useState(0);
   // Trigger history refresh after each completed run
   const [histRefreshKey,setHistRefreshKey] = useState(0);
+  const [fromHistory,setFromHistory] = useState(false);
+  const [fileLoading,setFileLoading] = useState(false);
 
   const fileRef = useRef(null);
   const estTimer = useRef(null);
+  const batchPollRef = useRef(null);
+
+  function clearBatchPoll() {
+    if (batchPollRef.current) {
+      clearInterval(batchPollRef.current);
+      batchPollRef.current = null;
+    }
+  }
+
+  useEffect(() => () => clearBatchPoll(), []);
 
   // Load all-time totals on login
   useEffect(()=>{
@@ -462,55 +550,72 @@ export default function App() {
 
   function handleLogin(t){sessionStorage.setItem("fc_token",t);setToken(t);}
   async function handleLogout(){
+    clearBatchPoll();
     await fetch(`${API}/logout`,{method:"POST",headers:authH(token)}).catch(()=>{});
     sessionStorage.removeItem("fc_token"); setToken(null);
     setClaims(null); setInput(""); setFileName(null); setLabel(""); setEstimate(null); setLastCost(null);
   }
 
-  function handleFileChange(e){
+  async function handleFileChange(e){
     const f=e.target.files?.[0]; if(!f) return;
     setFileName(f.name);
-    if(!label) setLabel(f.name.replace(/\.[^.]+$/,"")); // pre-fill label with filename (sans extension)
+    if(!label) setLabel(f.name.replace(/\.[^.]+$/,""));
     if(f.size>15000) setBatch(true);
-    const reader=new FileReader();
-    reader.onload=ev=>{setInput(ev.target.result);setClaims(null);};
-    reader.readAsText(f);
+    setClaims(null); setFromHistory(false); setError(null);
+    const ext=(f.name.match(/\.[^.]+$/)||[""])[0].toLowerCase();
+    const plain=[".txt",".md"];
+    if(plain.includes(ext)){
+      const reader=new FileReader();
+      reader.onload=ev=>{setInput(ev.target.result);};
+      reader.readAsText(f);
+      return;
+    }
+    setFileLoading(true);
+    try {
+      const fd=new FormData();
+      fd.append("file",f);
+      const r=await fetch(`${API}/extract/file`,{method:"POST",headers:{Authorization:`Bearer ${token}`},body:fd});
+      if(r.status===401){sessionStorage.removeItem("fc_token");setToken(null);return;}
+      if(!r.ok) throw new Error(await r.text()||`Extract failed (${r.status})`);
+      const d=await r.json();
+      setInput(d.text||"");
+      if(d.filename) setFileName(d.filename);
+    } catch(err){ setError(err.message||"Could not read file."); setFileName(null); setInput(""); }
+    finally { setFileLoading(false); }
   }
 
   function onCostRecorded(cost){
     setLastCost(cost);
-    setSessionCost(s=>s+cost.exact_cost_usd);
+    setSessionCost(s=>s+(cost?.exact_cost_usd||0));
     setSessionRuns(s=>s+1);
-    setAllTimeCost(s=>s+cost.exact_cost_usd);
-    setAllTimeIn(s=>s+cost.usage.input_tokens);
-    setAllTimeOut(s=>s+cost.usage.output_tokens);
     setHistRefreshKey(k=>k+1);
   }
 
   async function analyze(){
     if(!input.trim()) return;
-    setLoading(true); setError(null); setClaims(null); setLastCost(null); setProgress(null);
+    clearBatchPoll();
+    setLoading(true); setError(null); setClaims(null); setLastCost(null); setProgress(null); setFromHistory(false);
 
     if(batch){
-      // Async batch — submit and poll
       try {
         const r=await fetch(`${API}/analyze`,{method:"POST",headers:authH(token),body:JSON.stringify({text:input,batch:true,label,filename:fileName||""})});
-        if(r.status===401){sessionStorage.removeItem("fc_token");setToken(null);return;}
-        if(r.status===402){setError(await r.text());return;}
+        if(r.status===401){sessionStorage.removeItem("fc_token");setToken(null);setLoading(false);return;}
+        if(r.status===402){setError(await r.text());setLoading(false);return;}
         if(!r.ok) throw new Error(`Server error: ${r.status}`);
         const d=await r.json();
         if(d.batch_id){
-          setBatchJob({id:d.batch_id,progress:0,done:0,total:0});
-          setProgress({done:0,total:0,current:"",mode:"batch"});
+          setProgress({done:0,total:0,current:"Submitting batch…",mode:"batch"});
           pollBatch(d.batch_id);
           return;
         }
-      } catch(e){setError(e.message);}
-      finally{if(!batchJob)setLoading(false);}
-    } else {
-      // Sync — use SSE stream endpoint
-      try {
-        const resp = await fetch(`${API}/analyze/stream`,{
+        setError("Unexpected response from batch submit.");
+        setLoading(false);
+      } catch(e){setError(e.message);setLoading(false);}
+      return;
+    }
+    let streamDone=false;
+    try {
+      const resp = await fetch(`${API}/analyze/stream`,{
           method:"POST", headers:authH(token), body:JSON.stringify({text:input,batch:false,label,filename:fileName||""})
         });
         if(resp.status===401){sessionStorage.removeItem("fc_token");setToken(null);setLoading(false);return;}
@@ -526,68 +631,91 @@ export default function App() {
           const {done,value}=await reader.read();
           if(done) break;
           buf+=decoder.decode(value,{stream:true});
-          // Parse SSE lines
           const lines=buf.split("\n");
-          buf=lines.pop(); // last incomplete line stays in buffer
+          buf=lines.pop();
           for(const line of lines){
             if(line.startsWith("event:")) eventType=line.slice(6).trim();
             else if(line.startsWith("data:")) dataLine=line.slice(5).trim();
             else if(line===""&&eventType&&dataLine){
               try {
                 const payload=JSON.parse(dataLine);
-                if(eventType==="extracted") setProgress({done:0,total:payload.total,current:payload.topic?`Topic: ${payload.topic}`:"",mode:"sync"});
+                if(eventType==="status") setProgress(p=>({done:p?.done||0,total:p?.total||0,current:payload.message||"",mode:"sync"}));
+                else if(eventType==="extracted") setProgress({done:0,total:payload.total,current:payload.topic?`Topic: ${payload.topic}`:"",mode:"sync"});
                 else if(eventType==="progress") setProgress(p=>({...p,done:payload.done,total:payload.total,current:payload.current,mode:"sync"}));
                 else if(eventType==="done"){
+                  streamDone=true;
                   setClaims(payload.claims||[]);
                   if(payload.cost) onCostRecorded(payload.cost);
                   setProgress(null); setLoading(false);
                 }
-                else if(eventType==="error"){ setError(payload.message); setProgress(null); setLoading(false); }
+                else if(eventType==="error"){ streamDone=true; setError(payload.message); setProgress(null); setLoading(false); }
               } catch {}
               eventType=""; dataLine="";
             }
           }
         }
+        if(!streamDone){ setError("Connection closed before analysis finished."); setProgress(null); setLoading(false); }
       } catch(e){ setError(e.message); setProgress(null); setLoading(false); }
-    }
   }
 
   async function pollBatch(batchId){
-    const iv=setInterval(async()=>{
+    clearBatchPoll();
+    const tick=async()=>{
       try {
         const r=await fetch(`${API}/batch/${batchId}`,{headers:authH(token)});
-        if(!r.ok){clearInterval(iv);setError("Batch status check failed.");setLoading(false);setBatchJob(null);setProgress(null);return;}
+        if(r.status===404){
+          clearBatchPoll();
+          setError("Batch job not found (server may have restarted). Check Past fact-checks — the run may already be saved.");
+          setLoading(false); setProgress(null);
+          return;
+        }
+        if(!r.ok){
+          clearBatchPoll();
+          setError("Batch status check failed.");
+          setLoading(false); setProgress(null);
+          return;
+        }
         const d=await r.json();
-        setBatchJob({id:batchId,progress:d.progress||0,done:d.succeeded||0,total:d.total||0});
         setProgress({done:d.succeeded||0,total:d.total||0,current:"",mode:"batch"});
         if(d.status==="done"){
-          clearInterval(iv);
+          clearBatchPoll();
           setClaims(d.claims||[]);
           if(d.cost) onCostRecorded(d.cost);
-          setLoading(false); setBatchJob(null); setProgress(null);
+          setLoading(false); setProgress(null);
         } else if(d.status==="failed"){
-          clearInterval(iv); setError(d.error||"Batch failed."); setLoading(false); setBatchJob(null); setProgress(null);
+          clearBatchPoll();
+          setError(d.error||"Batch failed.");
+          setLoading(false); setProgress(null);
         }
-      } catch(e){clearInterval(iv);setError(e.message);setLoading(false);setBatchJob(null);setProgress(null);}
-    },8000);
+      } catch(e){
+        clearBatchPoll();
+        setError(e.message);
+        setLoading(false); setProgress(null);
+      }
+    };
+    await tick();
+    batchPollRef.current=setInterval(tick,8000);
   }
 
   function loadHistoryRun(run){
-    setInput(run.title);
+    setInput("");
     setLabel(run.label||"");
     setFileName(run.filename||null);
     setClaims(run.claims);
     setLastCost(run.cost);
-    setProgress(null); setError(null);
+    setProgress(null); setError(null); setFromHistory(true);
   }
 
   if(!token) return <Login onLogin={handleLogin}/>;
 
   const isLarge=input.length>3000;
   const estPill = estimate&&(
-    <span style={{fontSize:"11px",color:"#94a3b8",background:"#0f1117",border:"1px solid #1e2536",borderRadius:"20px",padding:"3px 10px",display:"inline-flex",alignItems:"center",gap:"6px"}}>
+    <span style={{fontSize:"11px",color:"#94a3b8",background:"#141820",border:`1px solid ${C.border}`,borderRadius:"20px",padding:"4px 12px",display:"inline-flex",alignItems:"center",gap:"6px"}}
+      title={estimate.aux_costs?.length?auxCostTitle(estimate.aux_costs):undefined}>
       <span style={{width:6,height:6,borderRadius:"50%",background:"#60a5fa",display:"inline-block"}}/>
       ~{estimate.estimated_claims} claims · <span style={{color:"#60a5fa",fontWeight:600}}>{fmt$(batch?estimate.est_cost_batch_usd:estimate.est_cost_usd)}</span>
+      {(estimate.est_aux_cost_usd||0)>0.00001&&<span style={{color:C.muted}}>(Haiku {fmt$(haikuFromEstimate(estimate))} + APIs {fmt$(estimate.est_aux_cost_usd)})</span>}
+      {(estimate.est_aux_cost_usd||0)<=0.00001&&estimate.aux_costs?.some(l=>l.note)&&<span style={{color:C.muted}}>(APIs free tier)</span>}
     </span>
   );
 
@@ -597,6 +725,7 @@ export default function App() {
         @keyframes spin{to{transform:rotate(360deg)}}
         @keyframes fadeIn{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
         input[type=file]{display:none}
+        textarea::placeholder,input::placeholder{color:#7c8da3;opacity:1}
       `}</style>
 
       <CostBar allTimeCost={allTimeCost} allTimeIn={allTimeIn} allTimeOut={allTimeOut} sessionCost={sessionCost} sessionRuns={sessionRuns}/>
@@ -604,9 +733,9 @@ export default function App() {
 
       {/* Header */}
       <div style={{borderBottom:"1px solid #1e2536",padding:"20px 40px",display:"flex",alignItems:"center",gap:"14px"}}>
-        <span style={{fontSize:"11px",letterSpacing:"0.2em",color:"#4a5568",textTransform:"uppercase"}}>VERIFY</span>
+        <span style={{fontSize:"11px",letterSpacing:"0.2em",color:C.muted,textTransform:"uppercase"}}>VERIFY</span>
         <h1 style={{margin:0,fontSize:"20px",fontWeight:700,fontFamily:"'DM Serif Display',Georgia,serif",color:"#f1f5f9",letterSpacing:"-0.02em"}}>Claim Inspector</h1>
-        <span style={{fontSize:"11px",color:"#4a5568",marginLeft:"auto"}}>Wikipedia · Semantic Scholar · arXiv · PubMed</span>
+        <span style={{fontSize:"12px",color:C.secondary,marginLeft:"auto"}}>Wikipedia · OpenAlex · Semantic Scholar · PubMed</span>
         <button onClick={handleLogout} style={{...S.ghost}}>sign out</button>
       </div>
 
@@ -620,7 +749,7 @@ export default function App() {
             <label style={S.label}>Input Text</label>
             <div style={{display:"flex",gap:"8px",alignItems:"center"}}>
               {estPill}
-              <button onClick={()=>{setInput(SAMPLE);setFileName(null);setLabel("");setClaims(null);setBatch(false);}} style={S.ghost}>load sample</button>
+              <button onClick={()=>{setInput(SAMPLE);setFileName(null);setLabel("");setClaims(null);setBatch(false);setFromHistory(false);}} style={S.ghost}>load sample</button>
               <button onClick={()=>fileRef.current?.click()} style={S.ghost}>upload file</button>
               <input ref={fileRef} type="file" accept=".txt,.md,.html,.htm,.docx,.pdf" onChange={handleFileChange}/>
             </div>
@@ -635,17 +764,18 @@ export default function App() {
             <textarea value={input} onChange={e=>{setInput(e.target.value);setClaims(null);setFileName(null);}} placeholder="Paste text here, or drag & drop a file (.txt, .md, .html, .docx, .pdf)…" rows={8}
               style={{width:"100%",background:"transparent",border:"none",color:"#cbd5e1",fontSize:"14px",lineHeight:"1.7",padding:"16px 18px",resize:"vertical",outline:"none",fontFamily:"inherit",boxSizing:"border-box"}}/>
           </div>
-          <div style={{fontSize:"11px",color:"#1e2536",marginTop:"5px"}}>
-            Supported: <span style={{color:"#334155"}}>.txt .md .html .docx .pdf</span>
-            <span style={{color:"#131926",margin:"0 6px"}}>·</span>
-            <span style={{color:"#1a2030"}}>Scanned PDFs not supported</span>
+          <div style={{fontSize:"12px",color:C.muted,marginTop:"6px"}}>
+            Supported: <span style={{color:C.secondary}}>.txt .md .html .docx .pdf</span>
+            <span style={{color:C.faint,margin:"0 8px"}}>·</span>
+            <span style={{color:C.faint}}>Scanned PDFs not supported</span>
           </div>
         </div>
 
         {/* Run label */}
         <div style={{marginBottom:"14px"}}>
           <input value={label} onChange={e=>setLabel(e.target.value)} placeholder="Name this fact-check (optional — shown in history)"
-            style={{...S.input,fontSize:"13px",color:label?"#cbd5e1":"#334155"}}/>
+            style={{...S.input,fontSize:"13px",color:label?C.text:C.muted}}/>
+        </div>
 
         {/* Batch info panel or simple toggle */}
         {batch ? (
@@ -655,28 +785,28 @@ export default function App() {
             {isLarge ? (
               <div style={{padding:"12px 16px",background:"rgba(251,146,60,0.06)",border:"1px solid rgba(251,146,60,0.2)",borderRadius:"8px",display:"flex",alignItems:"center",gap:"12px"}}>
                 <span style={{fontSize:"14px"}}>⚠</span>
-                <div style={{flex:1,fontSize:"12px",color:"#64748b",lineHeight:1.6}}>
-                  Large document — <span style={{color:"#fb923c"}}>batch mode saves {estimate?`~${fmt$(estimate.est_cost_usd-estimate.est_cost_batch_usd)}`:"~50%"}</span> but takes up to 24h via Anthropic's async API.
+                <div style={{flex:1,fontSize:"13px",color:C.secondary,lineHeight:1.6}}>
+                  Large document — <span style={{color:"#fb923c"}}>batch mode saves {estimate?`~${fmt$(haikuFromEstimate(estimate)-haikuBatchFromEstimate(estimate))} on Haiku`:"~50% on Haiku"}</span> but takes up to 24h via Anthropic's async API.
                 </div>
                 <Toggle value={batch} onChange={setBatch} label="Use batch" color="#fb923c"/>
               </div>
             ) : (
-              <Toggle value={batch} onChange={setBatch} label={`Batch mode — Anthropic async API · 50% cheaper · up to 24h${estimate?` · saves ${fmt$(estimate.est_cost_usd-estimate.est_cost_batch_usd)}`:""}`} color="#60a5fa"/>
+              <Toggle value={batch} onChange={setBatch} label={`Batch mode — Anthropic async API · 50% cheaper Haiku · up to 24h${estimate?` · saves ${fmt$(haikuFromEstimate(estimate)-haikuBatchFromEstimate(estimate))}`:""}`} color="#60a5fa"/>
             )}
           </div>
         )}
 
         {/* Analyze button */}
         <div style={{display:"flex",alignItems:"center",gap:"14px",marginBottom:"28px"}}>
-          <button onClick={analyze} disabled={loading||!input.trim()}
-            style={{...S.btn,background:loading?"#1e2536":"#1d4ed8",color:loading?"#475569":"#e0eaff",cursor:loading||!input.trim()?"not-allowed":"pointer",opacity:!input.trim()?0.5:1}}>
-            {loading?<><Spinner/>{batch?"Submitting batch…":"Analyzing…"}</>:"Analyze Claims"}
+          <button onClick={analyze} disabled={loading||fileLoading||!input.trim()}
+            style={{...S.btn,background:loading?"#1e2536":"#1d4ed8",color:loading?"#475569":"#e0eaff",cursor:loading||fileLoading||!input.trim()?"not-allowed":"pointer",opacity:!input.trim()?0.5:1}}>
+            {loading?<><Spinner/>{batch?"Submitting batch…":"Analyzing…"}</>:fileLoading?<><Spinner/>Reading file…</>:"Analyze Claims"}
           </button>
           {lastCost&&!loading&&(
-            <div style={{fontSize:"11px",color:"#475569",display:"flex",gap:"8px",alignItems:"center"}}>
-              Last run: <span style={{color:"#4ade80",fontWeight:600}}>{fmt$(lastCost.exact_cost_usd)}</span>
-              <span style={{color:"#1e2536"}}>·</span>
-              {fmtTok(lastCost.usage.input_tokens)} in / {fmtTok(lastCost.usage.output_tokens)} out
+            <div style={{fontSize:"13px",color:C.secondary,display:"flex",gap:"8px",alignItems:"center",flexWrap:"wrap"}}>
+              <CostSummary cost={lastCost} label="Last run"/>
+              <span style={{color:C.faint}}>·</span>
+              <span style={{color:C.text,fontWeight:500}}>{fmtTok(lastCost.usage.input_tokens)} in / {fmtTok(lastCost.usage.output_tokens)} out</span>
             </div>
           )}
         </div>
@@ -685,8 +815,7 @@ export default function App() {
 
         {progress&&<ProgressBar done={progress.done} total={progress.total} current={progress.current} mode={progress.mode}/>}
 
-        {claims&&<ClaimsView claims={claims} input={input} lastCost={lastCost}/>}
-      </div>
+        {claims&&<ClaimsView claims={claims} input={input} lastCost={lastCost} fromHistory={fromHistory}/>}
       </div>
     </div>
   );

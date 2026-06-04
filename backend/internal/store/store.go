@@ -73,7 +73,7 @@ func (s *Store) AddRun(run Run) error {
 	s.data.TotalOutputTok += run.Cost.Usage.OutputTokens
 	s.data.TotalCostUSD += run.Cost.ExactCostUSD
 	s.ensureDailyBucketLocked()
-	s.applyUsageDelta(run.APIUsage, 1)
+	s.applyUsageDelta(run.APIUsage)
 	return s.save()
 }
 
@@ -90,17 +90,13 @@ func (s *Store) RenameRun(id, label string) (bool, error) {
 	return false, nil
 }
 
-// DeleteRun removes a run by ID and subtracts its cost from totals. Returns false if not found.
+// DeleteRun removes a run from history. Cumulative cost and API usage are unchanged
+// (those reflect real API calls, not stored records).
 func (s *Store) DeleteRun(id string) (bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for i, r := range s.data.Runs {
 		if r.ID == id {
-			s.data.TotalInputTok -= r.Cost.Usage.InputTokens
-			s.data.TotalOutputTok -= r.Cost.Usage.OutputTokens
-			s.data.TotalCostUSD -= r.Cost.ExactCostUSD
-			s.ensureDailyBucketLocked()
-			s.applyUsageDelta(r.APIUsage, -1)
 			s.data.Runs = append(s.data.Runs[:i], s.data.Runs[i+1:]...)
 			return true, s.save()
 		}
@@ -122,6 +118,26 @@ func (s *Store) GetTotals() (inputTok, outputTok int, totalCost float64) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return s.data.TotalInputTok, s.data.TotalOutputTok, s.data.TotalCostUSD
+}
+
+// GetLifetimeVoyageEmbedTokens returns cumulative Voyage embedding tokens before a new run.
+func (s *Store) GetLifetimeVoyageEmbedTokens() int64 {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if c, ok := s.data.APIUsageLifetime[string(apilimits.Voyage)]; ok {
+		return c.EmbedTokens
+	}
+	return 0
+}
+
+// GetDailyOpenAlexSpend returns OpenAlex estimated spend for the current UTC day before a new run.
+func (s *Store) GetDailyOpenAlexSpend() float64 {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if c, ok := s.data.APIUsageDaily[string(apilimits.OpenAlex)]; ok {
+		return c.EstSpendUSD
+	}
+	return 0
 }
 
 // GetAPIUsageReport returns usage vs documented provider limits.
@@ -157,14 +173,11 @@ func (s *Store) ensureDailyBucketLocked() {
 	}
 }
 
-func (s *Store) applyUsageDelta(delta map[string]usage.Counts, sign int) {
+func (s *Store) applyUsageDelta(delta map[string]usage.Counts) {
 	if delta == nil {
 		return
 	}
 	for id, d := range delta {
-		if sign < 0 {
-			d = negateCounts(d)
-		}
 		s.mergeCounts(s.data.APIUsageLifetime, id, d)
 		s.mergeCounts(s.data.APIUsageDaily, id, d)
 	}
@@ -178,16 +191,6 @@ func (s *Store) mergeCounts(m map[string]usage.Counts, id string, d usage.Counts
 	c.EmbedTokens += d.EmbedTokens
 	c.EstSpendUSD += d.EstSpendUSD
 	m[id] = c
-}
-
-func negateCounts(c usage.Counts) usage.Counts {
-	return usage.Counts{
-		Requests:     -c.Requests,
-		InputTokens:  -c.InputTokens,
-		OutputTokens: -c.OutputTokens,
-		EmbedTokens:  -c.EmbedTokens,
-		EstSpendUSD:  -c.EstSpendUSD,
-	}
 }
 
 func (s *Store) load() error {

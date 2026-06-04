@@ -65,7 +65,14 @@ func (f *Fetcher) fetchOpenAlex(ctx context.Context, query string) []types.Sourc
 	if query == "" {
 		return nil
 	}
+	key := cacheKey("openalex", query)
+	if c := runCacheFrom(ctx); c != nil {
+		return c.sourcesFor(key, func() []types.Source { return f.fetchOpenAlexHTTP(ctx, query) })
+	}
+	return f.fetchOpenAlexHTTP(ctx, query)
+}
 
+func (f *Fetcher) fetchOpenAlexHTTP(ctx context.Context, query string) []types.Source {
 	q := url.QueryEscape(query)
 	endpoint := fmt.Sprintf("%s?search=%s&per_page=2&mailto=%s", openAlexWorksURL, q, url.QueryEscape(openAlexMailto))
 	if f.openAlexKey != "" {

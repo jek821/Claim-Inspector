@@ -61,3 +61,12 @@ func All() []Spec {
 
 // OpenAlexSearchCostUSD is the documented approximate cost per search call.
 const OpenAlexSearchCostUSD = 0.001
+
+// OpenAlexDailyFreeUSD is the documented free API credit per day.
+const OpenAlexDailyFreeUSD = 1.0
+
+// VoyagePricePerMillionUSD is list price for voyage-4-lite after the free tier.
+const VoyagePricePerMillionUSD = 0.02
+
+// VoyageFreeEmbedTokens is the documented free embedding token allocation per account.
+const VoyageFreeEmbedTokens = 200_000_000

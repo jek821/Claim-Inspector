@@ -16,7 +16,6 @@ import (
 	"factchecker/internal/batch"
 	"factchecker/internal/claims"
 	"factchecker/internal/convert"
-	"factchecker/internal/pricing"
 	"factchecker/internal/scorer"
 	"factchecker/internal/sources"
 	"factchecker/internal/apilimits"
@@ -74,7 +73,7 @@ func NewHandler(authMgr *auth.Manager, anthropicKey, voyageKey, openAlexKey, cor
 // costLimitOK returns true when the request may proceed. If the configured
 // spending cap is set and this request would exceed it, it writes a 402
 // response and returns false.
-func (h *Handler) costLimitOK(w http.ResponseWriter, text string) bool {
+func (h *Handler) costLimitOK(w http.ResponseWriter, text string, batch bool) bool {
 	if h.maxCostUSD <= 0 {
 		return true
 	}
@@ -84,10 +83,15 @@ func (h *Handler) costLimitOK(w http.ResponseWriter, text string) bool {
 		return false
 	}
 	remaining := h.maxCostUSD - spent
-	_, _, _, estCost, _ := pricing.EstimateFromText(text)
+	est := h.estimateCost(text)
+	estCost := est.EstCostUSD
+	if batch {
+		estCost = est.EstCostBatchUSD
+	}
 	if estCost > remaining {
 		http.Error(w,
-			fmt.Sprintf("request would exceed cost limit: ~$%.4f estimated, $%.4f remaining of $%.4f budget", estCost, remaining, h.maxCostUSD),
+			fmt.Sprintf("request would exceed cost limit: ~$%.4f estimated (Haiku $%.4f + APIs $%.4f), $%.4f remaining of $%.4f budget",
+				estCost, est.AnthropicCostUSD, est.EstAuxCostUSD, remaining, h.maxCostUSD),
 			http.StatusPaymentRequired)
 		return false
 	}
@@ -99,6 +103,7 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/login", h.Login)
 
 	protected := http.NewServeMux()
+	protected.HandleFunc("/extract/file", h.ExtractFile)
 	protected.HandleFunc("/analyze", h.Analyze)
 	protected.HandleFunc("/analyze/file", h.AnalyzeFile)
 	protected.HandleFunc("/analyze/stream", h.AnalyzeStream)
@@ -108,7 +113,7 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 	protected.HandleFunc("/history/", h.HistoryItem) // PATCH /history/:id for rename
 	protected.HandleFunc("/logout", h.Logout)
 
-	for _, path := range []string{"/analyze", "/analyze/file", "/analyze/stream", "/estimate", "/batch/", "/history", "/history/", "/logout"} {
+	for _, path := range []string{"/extract/file", "/analyze", "/analyze/file", "/analyze/stream", "/estimate", "/batch/", "/history", "/history/", "/logout"} {
 		mux.Handle(path, h.auth.Middleware(protected))
 	}
 }
@@ -144,12 +149,9 @@ func (h *Handler) Estimate(w http.ResponseWriter, r *http.Request) {
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Text == "" {
 		http.Error(w, "invalid body", http.StatusBadRequest); return
 	}
-	estClaims, estInput, estOutput, costReg, costBatch := pricing.EstimateFromText(req.Text)
+	est := h.estimateCost(req.Text)
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(types.CostEstimate{
-		EstimatedClaims: estClaims, EstInputTokens: estInput, EstOutputTokens: estOutput,
-		EstCostUSD: costReg, EstCostBatchUSD: costBatch, Model: pricing.ModelName,
-	})
+	json.NewEncoder(w).Encode(est)
 }
 
 func (h *Handler) History(w http.ResponseWriter, r *http.Request) {
@@ -206,12 +208,22 @@ func (h *Handler) Analyze(w http.ResponseWriter, r *http.Request) {
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || strings.TrimSpace(req.Text) == "" {
 		http.Error(w, "invalid request body", http.StatusBadRequest); return
 	}
-	if !h.costLimitOK(w, req.Text) { return }
+	if !h.costLimitOK(w, req.Text, req.Batch) { return }
 	if req.Batch {
 		h.submitBatch(w, req.Text, req.Label, req.FileName)
 	} else {
 		h.processSync(w, req.Text, req.Label, req.FileName)
 	}
+}
+
+func (h *Handler) ExtractFile(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed); return
+	}
+	text, filename, err := h.readFileUpload(w, r)
+	if err != nil { return }
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{"text": text, "filename": filename})
 }
 
 func (h *Handler) AnalyzeFile(w http.ResponseWriter, r *http.Request) {
@@ -220,7 +232,7 @@ func (h *Handler) AnalyzeFile(w http.ResponseWriter, r *http.Request) {
 	}
 	text, filename, err := h.readFileUpload(w, r)
 	if err != nil { return }
-	if !h.costLimitOK(w, text) { return }
+	if !h.costLimitOK(w, text, r.FormValue("batch") == "true") { return }
 	label := r.FormValue("label")
 	if r.FormValue("batch") == "true" {
 		h.submitBatch(w, text, label, filename)
@@ -229,10 +241,9 @@ func (h *Handler) AnalyzeFile(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// AnalyzeStream is the SSE endpoint for real-time progress during sync analysis.
-// GET /analyze/stream?text=... OR POST with body (text sent via query param or body).
+// AnalyzeStream is the SSE endpoint for real-time progress during instant (non-batch) analysis.
+// POST JSON body: { "text", "label", "filename" } — batch must use POST /analyze instead.
 func (h *Handler) AnalyzeStream(w http.ResponseWriter, r *http.Request) {
-	// Accept text from POST body
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed); return
 	}
@@ -240,7 +251,11 @@ func (h *Handler) AnalyzeStream(w http.ResponseWriter, r *http.Request) {
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || strings.TrimSpace(req.Text) == "" {
 		http.Error(w, "invalid request body", http.StatusBadRequest); return
 	}
-	if !h.costLimitOK(w, req.Text) { return }
+	if req.Batch {
+		http.Error(w, "batch mode not supported on /analyze/stream; use POST /analyze with batch:true", http.StatusBadRequest)
+		return
+	}
+	if !h.costLimitOK(w, req.Text, false) { return }
 
 	// Set SSE headers
 	w.Header().Set("Content-Type", "text/event-stream")
@@ -304,11 +319,7 @@ func (h *Handler) AnalyzeStream(w http.ResponseWriter, r *http.Request) {
 	go func() { wg.Wait(); close(progressCh) }()
 	for evt := range progressCh { sendEvent("progress", evt) }
 
-	cost := types.CostBreakdown{
-		Model: pricing.ModelName,
-		Usage: types.TokenUsage{InputTokens: totalInput, OutputTokens: totalOutput},
-		ExactCostUSD: pricing.CalcExact(totalInput, totalOutput),
-	}
+	cost := h.buildCostBreakdown(extracted.InputTokens, extracted.OutputTokens, totalInput, totalOutput, false, rec.Snapshot())
 	h.persistRun(req.Text, req.Label, req.FileName, "sync", results, cost, rec.Snapshot())
 	sendEvent("done", types.AnalyzeResponse{Claims: results, Cost: cost})
 }
@@ -350,11 +361,7 @@ func (h *Handler) processSync(w http.ResponseWriter, text, label, filename strin
 	}
 	wg.Wait()
 
-	cost := types.CostBreakdown{
-		Model: pricing.ModelName,
-		Usage: types.TokenUsage{InputTokens: totalInput, OutputTokens: totalOutput},
-		ExactCostUSD: pricing.CalcExact(totalInput, totalOutput),
-	}
+	cost := h.buildCostBreakdown(extracted.InputTokens, extracted.OutputTokens, totalInput, totalOutput, false, rec.Snapshot())
 	h.persistRun(text, label, filename, "sync", results, cost, rec.Snapshot())
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(types.AnalyzeResponse{Claims: results, Cost: cost})
@@ -472,12 +479,9 @@ func (h *Handler) pollBatch(jobID, text, label, filename string, claimTexts []st
 		claimsOut[i] = types.Claim{Text: ct, Risk: risk, Explanation: explanation, Sources: claimSources[i]}
 	}
 
-	cost := &types.CostBreakdown{
-		Model: pricing.ModelName,
-		Usage: types.TokenUsage{InputTokens: totalInput, OutputTokens: totalOutput},
-		ExactCostUSD: pricing.CalcExact(totalInput, totalOutput),
-	}
-	h.persistRun(text, label, filename, "batch", claimsOut, *cost, rec.Snapshot())
+	costVal := h.buildCostBreakdown(extractIn, extractOut, totalInput, totalOutput, true, rec.Snapshot())
+	cost := &costVal
+	h.persistRun(text, label, filename, "batch", claimsOut, costVal, rec.Snapshot())
 	h.jobs.set(jobID, &types.BatchStatusResponse{
 		BatchID: jobID, Status: "done", Progress: 100,
 		Succeeded: len(claimTexts), Total: len(claimTexts),

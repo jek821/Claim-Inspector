@@ -156,6 +156,41 @@ func containsTitle(titles []string, t string) bool {
 }
 
 func (f *Fetcher) wikipediaSearchTitles(ctx context.Context, query string) []string {
+	query = strings.TrimSpace(query)
+	if query == "" {
+		return nil
+	}
+	key := cacheKey("wiki:search", query)
+	if c := runCacheFrom(ctx); c != nil {
+		if titles := c.sourcesFor(key, func() []types.Source {
+			return titlesToSources(f.wikipediaSearchTitlesHTTP(ctx, query))
+		}); len(titles) > 0 {
+			return sourcesToTitles(titles)
+		}
+		return nil
+	}
+	return f.wikipediaSearchTitlesHTTP(ctx, query)
+}
+
+func titlesToSources(titles []string) []types.Source {
+	out := make([]types.Source, len(titles))
+	for i, t := range titles {
+		out[i] = types.Source{Title: t}
+	}
+	return out
+}
+
+func sourcesToTitles(sources []types.Source) []string {
+	out := make([]string, 0, len(sources))
+	for _, s := range sources {
+		if t := strings.TrimSpace(s.Title); t != "" {
+			out = append(out, t)
+		}
+	}
+	return out
+}
+
+func (f *Fetcher) wikipediaSearchTitlesHTTP(ctx context.Context, query string) []string {
 	q := url.QueryEscape(query)
 	endpoint := fmt.Sprintf(
 		"https://en.wikipedia.org/w/api.php?action=query&list=search&srsearch=%s&format=json&srlimit=%d",
@@ -180,6 +215,49 @@ func (f *Fetcher) fetchWikipediaExtracts(ctx context.Context, titles []string, c
 	if len(titles) == 0 {
 		return nil
 	}
+	keywords := claimKeywords(claim)
+	c := runCacheFrom(ctx)
+	var out []types.Source
+	var toFetch []string
+
+	for _, title := range titles {
+		title = strings.TrimSpace(title)
+		if title == "" {
+			continue
+		}
+		articleKey := cacheKey("wiki:title", title)
+		if c != nil {
+			if cached, ok := c.wikiArticle(articleKey); ok && cached.Body != "" {
+				out = append(out, wikiSourceFromBody(cached, keywords))
+				continue
+			}
+		}
+		toFetch = append(toFetch, title)
+	}
+
+	if len(toFetch) > 0 {
+		for _, s := range f.fetchWikipediaExtractsHTTP(ctx, toFetch) {
+			if c != nil {
+				c.storeWikiArticle(cacheKey("wiki:title", s.Title), s)
+			}
+			out = append(out, wikiSourceFromBody(s, keywords))
+		}
+	}
+	return out
+}
+
+func wikiSourceFromBody(s types.Source, keywords []string) types.Source {
+	s.Snippet = excerptForClaim(s.Body, keywords)
+	if s.Snippet == "" && s.Body != "" {
+		s.Snippet = truncate(s.Body, scorerSnippetMax)
+	}
+	return s
+}
+
+func (f *Fetcher) fetchWikipediaExtractsHTTP(ctx context.Context, titles []string) []types.Source {
+	if len(titles) == 0 {
+		return nil
+	}
 	encoded := make([]string, len(titles))
 	for i, t := range titles {
 		encoded[i] = url.QueryEscape(t)
@@ -197,17 +275,14 @@ func (f *Fetcher) fetchWikipediaExtracts(ctx context.Context, titles []string, c
 		return nil
 	}
 
-	keywords := claimKeywords(claim)
 	var sources []types.Source
 	for _, page := range wr.Query.Pages {
 		if page.Missing != "" || page.Extract == "" {
 			continue
 		}
-		snippet := excerptForClaim(page.Extract, keywords)
 		sources = append(sources, types.Source{
 			Title:    page.Title,
 			URL:      wikiArticleURL(page.Title),
-			Snippet:  snippet,
 			Body:     page.Extract,
 			Provider: "wikipedia",
 		})
@@ -332,6 +407,18 @@ type scholarResp struct {
 }
 
 func (f *Fetcher) fetchSemanticScholar(ctx context.Context, query string) []types.Source {
+	query = strings.TrimSpace(query)
+	if query == "" {
+		return nil
+	}
+	key := cacheKey("scholar", query)
+	if c := runCacheFrom(ctx); c != nil {
+		return c.sourcesFor(key, func() []types.Source { return f.fetchSemanticScholarHTTP(ctx, query) })
+	}
+	return f.fetchSemanticScholarHTTP(ctx, query)
+}
+
+func (f *Fetcher) fetchSemanticScholarHTTP(ctx context.Context, query string) []types.Source {
 	q := url.QueryEscape(query)
 	endpoint := fmt.Sprintf(
 		"https://api.semanticscholar.org/graph/v1/paper/search?query=%s&limit=2&fields=title,url,abstract",
@@ -389,6 +476,18 @@ type pubmedSummaryResp struct {
 }
 
 func (f *Fetcher) fetchPubMed(ctx context.Context, query string) []types.Source {
+	query = strings.TrimSpace(query)
+	if query == "" {
+		return nil
+	}
+	key := cacheKey("pubmed", query)
+	if c := runCacheFrom(ctx); c != nil {
+		return c.sourcesFor(key, func() []types.Source { return f.fetchPubMedHTTP(ctx, query) })
+	}
+	return f.fetchPubMedHTTP(ctx, query)
+}
+
+func (f *Fetcher) fetchPubMedHTTP(ctx context.Context, query string) []types.Source {
 	q := url.QueryEscape(query)
 	searchURL := fmt.Sprintf(
 		"https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi?db=pubmed&term=%s&retmax=2&retmode=json&tool=claiminspector&email=factchecker@example.com",

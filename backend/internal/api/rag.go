@@ -5,11 +5,13 @@ import (
 	"sync"
 
 	"factchecker/internal/retrieval"
+	"factchecker/internal/sources"
 	"factchecker/internal/types"
 )
 
 // gatherAndIndex fetches sources for all claims, deduplicates by URL, and builds a vector/lexical index.
 func (h *Handler) gatherAndIndex(ctx context.Context, claims []types.EnrichedClaim, doc types.DocumentContext) (*retrieval.Index, error) {
+	ctx = sources.WithRunCache(ctx, sources.NewRunCache())
 	byURL := make(map[string]types.Source)
 	var mu sync.Mutex
 	var wg sync.WaitGroup
