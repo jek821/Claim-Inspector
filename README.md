@@ -1,6 +1,6 @@
 # Claim Inspector
 
-An open-source fact-checking tool that cross-references text against Wikipedia, Semantic Scholar, arXiv, and PubMed, then uses Claude Haiku to score each claim by accuracy risk.
+An open-source fact-checking tool that analyzes document context, cross-references claims against Wikipedia, Semantic Scholar, and PubMed using tailored lookup metadata, then uses Claude Haiku to score each claim by accuracy risk.
 
 Paste text or upload a document — claims are highlighted green/yellow/orange/red based on how suspect they are, with source links for every finding. Full run history and cost tracking persist across server restarts.
 
@@ -8,9 +8,9 @@ Paste text or upload a document — claims are highlighted green/yellow/orange/r
 
 ## How it works
 
-1. Text is split into atomic factual claims (one Haiku API call for the whole document)
-2. Each claim is condensed into focused search keywords (one Haiku call per claim), then searched concurrently against Wikipedia, Semantic Scholar, arXiv, and PubMed
-3. Retrieved sources are passed to Haiku to score each claim: `verified / low / medium / high / unverifiable`
+1. One Haiku pass extracts document topic/domain/entities plus atomic claims with per-claim context and lookup hints (Wikipedia title, search queries, which databases apply)
+2. Each claim is searched only against relevant providers (e.g. PubMed for medical claims), with direct Wikipedia article lookup when confident
+3. Off-topic sources are filtered; Haiku scores each claim with full document context: `verified / low / medium / high / unverifiable`
 4. Results stream back in real-time with color-coded highlights and clickable source links
 5. Every completed run is saved to disk — history and cumulative costs survive server restarts
 
@@ -47,7 +47,7 @@ To minimize cost, strip headers, footers, citations, and page numbers before upl
 - **Backend** — Go 1.22+ (stdlib only, no frameworks)
 - **Frontend** — React + Vite, single-page app
 - **AI** — Claude Haiku 4.5 via Anthropic API ($1/$5 per million input/output tokens)
-- **Sources** — Wikipedia (free), Semantic Scholar (free), arXiv (free), PubMed/NCBI E-utilities (free)
+- **Sources** — Wikipedia (free), Semantic Scholar (free), PubMed/NCBI E-utilities (free); routed per claim by domain
 - **Persistence** — JSON file on disk (`data/history.json`), atomic writes
 
 ---

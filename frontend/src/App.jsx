@@ -488,7 +488,7 @@ export default function App() {
             else if(line===""&&eventType&&dataLine){
               try {
                 const payload=JSON.parse(dataLine);
-                if(eventType==="extracted") setProgress({done:0,total:payload.total,current:"",mode:"sync"});
+                if(eventType==="extracted") setProgress({done:0,total:payload.total,current:payload.topic?`Topic: ${payload.topic}`:"",mode:"sync"});
                 else if(eventType==="progress") setProgress(p=>({...p,done:payload.done,total:payload.total,current:payload.current,mode:"sync"}));
                 else if(eventType==="done"){
                   setClaims(payload.claims||[]);

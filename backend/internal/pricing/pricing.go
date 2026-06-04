@@ -17,8 +17,8 @@ const (
 	OutputPerClaim = 150
 	// Average claims per 100 words of input
 	ClaimsPerHundredWords = 5.0
-	// Extraction call overhead (system prompt)
-	ExtractionOverhead = 200
+	// Extraction call overhead (system prompt + structured metadata per claim)
+	ExtractionOverhead = 400
 )
 
 // CalcExact returns the exact cost in USD for known token counts.
@@ -38,7 +38,7 @@ func EstimateFromText(text string) (estClaims, estInput, estOutput int, costRegu
 
 	// Extraction call: input = text tokens + overhead
 	extractionInput := int(float64(words)*TokensPerWord) + ExtractionOverhead
-	extractionOutput := estClaims * 15 // ~15 tokens per claim in the JSON array
+	extractionOutput := estClaims * 80 // structured claim + lookup metadata per claim
 
 	// Scoring calls: each claim gets overhead + claim text + source snippets
 	scoringInput := estClaims * OverheadPerClaimInput

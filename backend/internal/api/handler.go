@@ -258,28 +258,29 @@ func (h *Handler) AnalyzeStream(w http.ResponseWriter, r *http.Request) {
 	}
 
 	total := len(extracted.Claims)
-	sendEvent("extracted", map[string]int{"total": total})
+	sendEvent("extracted", map[string]any{"total": total, "topic": extracted.Document.Topic, "domain": extracted.Document.Domain})
 
 	results := make([]types.Claim, total)
 	var done atomic.Int32
 	totalInput := extracted.InputTokens; totalOutput := extracted.OutputTokens
 	var mu sync.Mutex
 	progressCh := make(chan types.ProgressEvent, total)
+	doc := extracted.Document
 
 	var wg sync.WaitGroup
-	for i, claimText := range extracted.Claims {
+	for i, ec := range extracted.Claims {
 		wg.Add(1)
-		go func(idx int, ct string) {
+		go func(idx int, claim types.EnrichedClaim) {
 			defer wg.Done()
-			srcs := h.fetcher.FetchAll(ctx, ct)
-			sr, err := h.scorer.Score(ctx, ct, srcs)
+			srcs := h.fetcher.FetchAll(ctx, claim, doc)
+			sr, err := h.scorer.Score(ctx, claim, doc, srcs)
 			if err != nil { sr.Risk = "unverifiable"; sr.Explanation = "Could not complete scoring." }
 			mu.Lock(); totalInput += sr.InputTokens; totalOutput += sr.OutputTokens; mu.Unlock()
-			results[idx] = types.Claim{Text: ct, Risk: sr.Risk, Explanation: sr.Explanation, Sources: srcs}
+			results[idx] = types.Claim{Text: claim.Text, Risk: sr.Risk, Explanation: sr.Explanation, Sources: srcs}
 			n := int(done.Add(1))
-			snippet := ct; if len(snippet) > 60 { snippet = snippet[:60] + "…" }
+			snippet := claim.Text; if len(snippet) > 60 { snippet = snippet[:60] + "…" }
 			progressCh <- types.ProgressEvent{Done: n, Total: total, Current: snippet}
-		}(i, claimText)
+		}(i, ec)
 	}
 
 	go func() { wg.Wait(); close(progressCh) }()
@@ -308,17 +309,18 @@ func (h *Handler) processSync(w http.ResponseWriter, text, label, filename strin
 	var mu sync.Mutex
 	results := make([]types.Claim, len(extracted.Claims))
 	var wg sync.WaitGroup
+	doc := extracted.Document
 
-	for i, ct := range extracted.Claims {
+	for i, ec := range extracted.Claims {
 		wg.Add(1)
-		go func(idx int, claimText string) {
+		go func(idx int, claim types.EnrichedClaim) {
 			defer wg.Done()
-			srcs := h.fetcher.FetchAll(ctx, claimText)
-			sr, err := h.scorer.Score(ctx, claimText, srcs)
+			srcs := h.fetcher.FetchAll(ctx, claim, doc)
+			sr, err := h.scorer.Score(ctx, claim, doc, srcs)
 			if err != nil { sr.Risk = "unverifiable"; sr.Explanation = "Could not complete scoring." }
 			mu.Lock(); totalInput += sr.InputTokens; totalOutput += sr.OutputTokens; mu.Unlock()
-			results[idx] = types.Claim{Text: claimText, Risk: sr.Risk, Explanation: sr.Explanation, Sources: srcs}
-		}(i, ct)
+			results[idx] = types.Claim{Text: claim.Text, Risk: sr.Risk, Explanation: sr.Explanation, Sources: srcs}
+		}(i, ec)
 	}
 	wg.Wait()
 
@@ -344,22 +346,23 @@ func (h *Handler) submitBatch(w http.ResponseWriter, text, label, filename strin
 		http.Error(w, "failed to extract claims", http.StatusInternalServerError); return
 	}
 
+	doc := extracted.Document
 	claimSources := make([][]types.Source, len(extracted.Claims))
 	var wg sync.WaitGroup
-	for i, ct := range extracted.Claims {
+	for i, ec := range extracted.Claims {
 		wg.Add(1)
-		go func(idx int, claim string) {
+		go func(idx int, claim types.EnrichedClaim) {
 			defer wg.Done()
-			claimSources[idx] = h.fetcher.FetchAll(ctx, claim)
-		}(i, ct)
+			claimSources[idx] = h.fetcher.FetchAll(ctx, claim, doc)
+		}(i, ec)
 	}
 	wg.Wait()
 
 	requests := make([]batch.Request, len(extracted.Claims))
-	for i, ct := range extracted.Claims {
+	for i, ec := range extracted.Claims {
 		requests[i] = batch.Request{
 			CustomID: fmt.Sprintf("claim-%d", i),
-			Params:   h.scorer.BuildParams(ct, claimSources[i]),
+			Params:   h.scorer.BuildParams(ec, doc, claimSources[i]),
 		}
 	}
 
@@ -375,7 +378,11 @@ func (h *Handler) submitBatch(w http.ResponseWriter, text, label, filename strin
 	h.jobs.set(batchID, &types.BatchStatusResponse{
 		BatchID: batchID, Status: "processing", Total: len(extracted.Claims),
 	})
-	go h.pollBatch(batchID, text, label, filename, extracted.Claims, claimSources, extracted.InputTokens, extracted.OutputTokens)
+	claimTexts := make([]string, len(extracted.Claims))
+	for i, c := range extracted.Claims {
+		claimTexts[i] = c.Text
+	}
+	go h.pollBatch(batchID, text, label, filename, claimTexts, claimSources, extracted.InputTokens, extracted.OutputTokens)
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(types.BatchSubmitResponse{

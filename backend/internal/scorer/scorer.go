@@ -13,19 +13,19 @@ import (
 	"factchecker/internal/types"
 )
 
-const scoreSystemPrompt = `You are a fact-checking assistant. You will be given a factual claim and reference sources retrieved from Wikipedia and academic databases.
+const scoreSystemPrompt = `You are a fact-checking assistant. You will be given document context, a factual claim (with local context), and reference sources from Wikipedia and/or academic databases.
 
 Your job:
-1. Use ONLY the provided sources as evidence. Do NOT use your own training knowledge to verify or contradict claims.
-2. If the sources do not directly address the claim (off-topic titles, unrelated snippets), rate it "unverifiable" and say the sources didn't cover it.
-3. Only rate a claim based on what the sources actually say.
+1. Use ONLY the provided sources as evidence. Do NOT use your own training knowledge.
+2. Use the document topic and local context to judge whether sources are on-topic. Ignore sources about unrelated subjects (e.g. TV shows, fiction, unrelated people) even if keyword overlap exists.
+3. If no on-topic source addresses the claim, rate "unverifiable".
 4. Assign a risk level:
-   - "verified": sources directly and clearly support the claim
-   - "low": sources mostly support the claim but with a minor factual nuance or imprecision
-   - "medium": sources partially support the claim, or the claim is an oversimplification of what sources say
-   - "high": sources directly contradict the claim, or the claim contains a significant factual error (e.g. wrong by a large magnitude, wrong time period, wrong species)
-   - "unverifiable": sources do not address the claim at all
-5. Write 1-2 sentences citing what the sources say (or noting they don't address it).
+   - "verified": on-topic sources directly and clearly support the claim
+   - "low": sources mostly support the claim with minor nuance
+   - "medium": sources partially support or the claim oversimplifies
+   - "high": on-topic sources contradict the claim or show a major factual error
+   - "unverifiable": no on-topic source addresses the claim
+5. Write 1-2 sentences citing specific sources (or why they are off-topic/unhelpful).
 
 Respond ONLY with a JSON object. No markdown, no backticks:
 {"risk": "verified|low|medium|high|unverifiable", "explanation": "..."}`
@@ -77,12 +77,12 @@ func NewScorer(apiKey string) *Scorer {
 }
 
 // BuildParams builds the batch.MessageParams for a single claim — used by the Batch API flow.
-func (s *Scorer) BuildParams(claim string, srcs []types.Source) batch.MessageParams {
+func (s *Scorer) BuildParams(claim types.EnrichedClaim, doc types.DocumentContext, srcs []types.Source) batch.MessageParams {
 	return batch.MessageParams{
 		Model:     "claude-haiku-4-5-20251001",
 		MaxTokens: 200,
 		System:    scoreSystemPrompt,
-		Messages:  []batch.Message{{Role: "user", Content: buildUserMsg(claim, srcs)}},
+		Messages:  []batch.Message{{Role: "user", Content: buildUserMsg(claim, doc, srcs)}},
 	}
 }
 
@@ -101,12 +101,12 @@ func (s *Scorer) ParseScoreText(text string) (risk, explanation string) {
 }
 
 // Score scores a single claim synchronously and returns exact token usage.
-func (s *Scorer) Score(ctx context.Context, claim string, srcs []types.Source) (ScoreResult, error) {
+func (s *Scorer) Score(ctx context.Context, claim types.EnrichedClaim, doc types.DocumentContext, srcs []types.Source) (ScoreResult, error) {
 	body, _ := json.Marshal(anthropicRequest{
 		Model:     "claude-haiku-4-5-20251001",
 		MaxTokens: 200,
 		System:    scoreSystemPrompt,
-		Messages:  []anthropicMessage{{Role: "user", Content: buildUserMsg(claim, srcs)}},
+		Messages:  []anthropicMessage{{Role: "user", Content: buildUserMsg(claim, doc, srcs)}},
 	})
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost,
@@ -146,16 +146,25 @@ func (s *Scorer) Score(ctx context.Context, claim string, srcs []types.Source) (
 	}, nil
 }
 
-func buildUserMsg(claim string, srcs []types.Source) string {
+func buildUserMsg(claim types.EnrichedClaim, doc types.DocumentContext, srcs []types.Source) string {
 	var sb strings.Builder
-	sb.WriteString("Claim: ")
-	sb.WriteString(claim)
+	fmt.Fprintf(&sb, "Document topic: %s\n", doc.Topic)
+	fmt.Fprintf(&sb, "Document domain: %s\n", doc.Domain)
+	if doc.Summary != "" {
+		fmt.Fprintf(&sb, "Document summary: %s\n", doc.Summary)
+	}
+	sb.WriteString("\nClaim: ")
+	sb.WriteString(claim.Text)
+	if claim.LocalContext != "" {
+		sb.WriteString("\nLocal context: ")
+		sb.WriteString(claim.LocalContext)
+	}
 	sb.WriteString("\n\nSources:\n")
 	if len(srcs) == 0 {
-		sb.WriteString("(no sources found)")
+		sb.WriteString("(no on-topic sources found)")
 	} else {
 		for i, src := range srcs {
-			fmt.Fprintf(&sb, "%d. %s\n   %s\n\n", i+1, src.Title, src.Snippet)
+			fmt.Fprintf(&sb, "%d. [%s] %s\n   %s\n\n", i+1, src.Provider, src.Title, src.Snippet)
 		}
 	}
 	return sb.String()

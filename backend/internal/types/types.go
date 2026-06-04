@@ -1,5 +1,25 @@
 package types
 
+// DocumentContext is document-level metadata used to disambiguate claim lookups.
+type DocumentContext struct {
+	Topic    string   `json:"topic"`
+	Domain   string   `json:"domain"` // general, science, medicine, history, technology, law, economics, biography, geography
+	Entities []string `json:"entities"`
+	Summary  string   `json:"summary"`
+}
+
+// EnrichedClaim is an atomic claim plus lookup hints from the analysis pass.
+type EnrichedClaim struct {
+	Text            string   `json:"text"`
+	LocalContext    string   `json:"local_context"`
+	Entities        []string `json:"entities"`
+	WikipediaTitle  string   `json:"wikipedia_title,omitempty"`
+	WikiSearchQuery string   `json:"wiki_search_query"`
+	ScholarQuery    string   `json:"scholar_query,omitempty"`
+	PubMedQuery     string   `json:"pubmed_query,omitempty"`
+	Providers       []string `json:"providers"` // wikipedia, semantic_scholar, pubmed
+}
+
 // Claim is a single verifiable assertion extracted from the input text.
 type Claim struct {
 	Text        string   `json:"text"`

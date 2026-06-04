@@ -1,7 +1,6 @@
 package sources
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -10,69 +9,22 @@ import (
 	"net/url"
 	"strings"
 	"sync"
+	"unicode"
 
 	"factchecker/internal/types"
 )
 
-// Fetcher retrieves supporting sources for a claim.
+// Fetcher retrieves supporting sources for a claim using document and claim metadata.
 type Fetcher struct {
 	client *http.Client
-	apiKey string
 }
 
-func NewFetcher(apiKey string) *Fetcher {
-	return &Fetcher{client: &http.Client{}, apiKey: apiKey}
+func NewFetcher(_ string) *Fetcher {
+	return &Fetcher{client: &http.Client{}}
 }
 
-type haikuResponse struct {
-	Content []struct {
-		Type string `json:"type"`
-		Text string `json:"text"`
-	} `json:"content"`
-}
-
-// generateSearchQuery uses Claude Haiku to extract focused search keywords from a claim.
-// Falls back to the raw claim on any error.
-func (f *Fetcher) generateSearchQuery(ctx context.Context, claim string) string {
-	if f.apiKey == "" {
-		return claim
-	}
-	body, _ := json.Marshal(map[string]any{
-		"model":      "claude-haiku-4-5-20251001",
-		"max_tokens": 60,
-		"system":     "Generate a concise Wikipedia search query for the factual claim. Include the specific subject (animal, person, place, or object), the key attribute being claimed, and any relevant scientific or technical terms. The query must be tightly focused so Wikipedia returns the article that directly covers this claim. Return only the search query, no explanation.",
-		"messages":   []map[string]string{{"role": "user", "content": claim}},
-	})
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost,
-		"https://api.anthropic.com/v1/messages", bytes.NewReader(body))
-	if err != nil {
-		return claim
-	}
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("x-api-key", f.apiKey)
-	req.Header.Set("anthropic-version", "2023-06-01")
-
-	resp, err := f.client.Do(req)
-	if err != nil || resp.StatusCode != 200 {
-		return claim
-	}
-	defer resp.Body.Close()
-	raw, _ := io.ReadAll(resp.Body)
-	var ar haikuResponse
-	if err := json.Unmarshal(raw, &ar); err != nil || len(ar.Content) == 0 {
-		return claim
-	}
-	q := strings.TrimSpace(ar.Content[0].Text)
-	if q == "" {
-		return claim
-	}
-	return q
-}
-
-// FetchAll retrieves sources from all available providers concurrently.
-func (f *Fetcher) FetchAll(ctx context.Context, claim string) []types.Source {
-	query := f.generateSearchQuery(ctx, claim)
-
+// FetchAll retrieves sources from providers selected for this claim, then filters for relevance.
+func (f *Fetcher) FetchAll(ctx context.Context, claim types.EnrichedClaim, doc types.DocumentContext) []types.Source {
 	var (
 		mu      sync.Mutex
 		results []types.Source
@@ -85,13 +37,43 @@ func (f *Fetcher) FetchAll(ctx context.Context, claim string) []types.Source {
 		mu.Unlock()
 	}
 
-	wg.Add(3)
-	go func() { defer wg.Done(); add(f.fetchWikipedia(ctx, query)) }()
-	go func() { defer wg.Done(); add(f.fetchSemanticScholar(ctx, query)) }()
-	go func() { defer wg.Done(); add(f.fetchPubMed(ctx, query)) }()
+	providers := providerSet(claim.Providers)
+	if len(providers) == 0 {
+		providers["wikipedia"] = true
+	}
+
+	if providers["wikipedia"] {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			add(f.fetchWikipedia(ctx, claim, doc))
+		}()
+	}
+	if providers["semantic_scholar"] && strings.TrimSpace(claim.ScholarQuery) != "" {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			add(f.fetchSemanticScholar(ctx, claim.ScholarQuery))
+		}()
+	}
+	if providers["pubmed"] && strings.TrimSpace(claim.PubMedQuery) != "" {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			add(f.fetchPubMed(ctx, claim.PubMedQuery))
+		}()
+	}
 
 	wg.Wait()
-	return results
+	return filterRelevant(results, claim, doc)
+}
+
+func providerSet(list []string) map[string]bool {
+	m := make(map[string]bool, len(list))
+	for _, p := range list {
+		m[strings.ToLower(strings.TrimSpace(p))] = true
+	}
+	return m
 }
 
 // --- Wikipedia ---
@@ -105,26 +87,76 @@ type wikiSearchResp struct {
 	} `json:"query"`
 }
 
-func (f *Fetcher) fetchWikipedia(ctx context.Context, claim string) []types.Source {
-	q := url.QueryEscape(claim)
+type wikiExtractResp struct {
+	Query struct {
+		Pages map[string]struct {
+			Title    string `json:"title"`
+			Missing  string `json:"missing"`
+			Extract  string `json:"extract"`
+			PageID   int    `json:"pageid"`
+		} `json:"pages"`
+	} `json:"query"`
+}
+
+func (f *Fetcher) fetchWikipedia(ctx context.Context, claim types.EnrichedClaim, doc types.DocumentContext) []types.Source {
+	if title := strings.TrimSpace(claim.WikipediaTitle); title != "" {
+		if srcs := f.fetchWikipediaByTitle(ctx, title); len(srcs) > 0 {
+			return srcs
+		}
+	}
+	query := strings.TrimSpace(claim.WikiSearchQuery)
+	if query == "" {
+		query = claim.Text
+	}
+	if doc.Topic != "" {
+		query = query + " " + doc.Topic
+	}
+	return f.fetchWikipediaSearch(ctx, query)
+}
+
+func (f *Fetcher) fetchWikipediaByTitle(ctx context.Context, title string) []types.Source {
+	t := url.QueryEscape(strings.ReplaceAll(title, " ", "_"))
 	endpoint := fmt.Sprintf(
-		"https://en.wikipedia.org/w/api.php?action=query&list=search&srsearch=%s&format=json&srlimit=2",
+		"https://en.wikipedia.org/w/api.php?action=query&format=json&prop=extracts&explaintext=1&exintro=1&exsentences=4&titles=%s",
+		t,
+	)
+	body, ok := f.wikiGET(ctx, endpoint)
+	if !ok {
+		return nil
+	}
+	var wr wikiExtractResp
+	if err := json.Unmarshal(body, &wr); err != nil {
+		return nil
+	}
+	var sources []types.Source
+	for _, page := range wr.Query.Pages {
+		if page.Missing != "" || page.Extract == "" {
+			continue
+		}
+		snippet := page.Extract
+		if len(snippet) > 400 {
+			snippet = snippet[:400] + "..."
+		}
+		sources = append(sources, types.Source{
+			Title:    page.Title,
+			URL:      wikiArticleURL(page.Title),
+			Snippet:  snippet,
+			Provider: "wikipedia",
+		})
+	}
+	return sources
+}
+
+func (f *Fetcher) fetchWikipediaSearch(ctx context.Context, query string) []types.Source {
+	q := url.QueryEscape(query)
+	endpoint := fmt.Sprintf(
+		"https://en.wikipedia.org/w/api.php?action=query&list=search&srsearch=%s&format=json&srlimit=3",
 		q,
 	)
-
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
-	if err != nil {
+	body, ok := f.wikiGET(ctx, endpoint)
+	if !ok {
 		return nil
 	}
-	req.Header.Set("User-Agent", "FactChecker/1.0")
-
-	resp, err := f.client.Do(req)
-	if err != nil || resp.StatusCode != http.StatusOK {
-		return nil
-	}
-	defer resp.Body.Close()
-
-	body, _ := io.ReadAll(resp.Body)
 	var wr wikiSearchResp
 	if err := json.Unmarshal(body, &wr); err != nil {
 		return nil
@@ -136,7 +168,7 @@ func (f *Fetcher) fetchWikipedia(ctx context.Context, claim string) []types.Sour
 		snippet = strings.ReplaceAll(snippet, "</span>", "")
 		sources = append(sources, types.Source{
 			Title:    s.Title,
-			URL:      "https://en.wikipedia.org/wiki/" + url.QueryEscape(strings.ReplaceAll(s.Title, " ", "_")),
+			URL:      wikiArticleURL(s.Title),
 			Snippet:  snippet,
 			Provider: "wikipedia",
 		})
@@ -144,28 +176,41 @@ func (f *Fetcher) fetchWikipedia(ctx context.Context, claim string) []types.Sour
 	return sources
 }
 
+func (f *Fetcher) wikiGET(ctx context.Context, endpoint string) ([]byte, bool) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	if err != nil {
+		return nil, false
+	}
+	req.Header.Set("User-Agent", "ClaimInspector/1.0 (fact-checking; contact: factchecker@example.com)")
+	resp, err := f.client.Do(req)
+	if err != nil || resp.StatusCode != http.StatusOK {
+		return nil, false
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	return body, true
+}
+
 // --- Semantic Scholar ---
 
 type scholarResp struct {
 	Data []struct {
-		Title  string `json:"title"`
-		URL    string `json:"url"`
+		Title    string `json:"title"`
+		URL      string `json:"url"`
 		Abstract string `json:"abstract"`
 	} `json:"data"`
 }
 
-func (f *Fetcher) fetchSemanticScholar(ctx context.Context, claim string) []types.Source {
-	q := url.QueryEscape(claim)
+func (f *Fetcher) fetchSemanticScholar(ctx context.Context, query string) []types.Source {
+	q := url.QueryEscape(query)
 	endpoint := fmt.Sprintf(
 		"https://api.semanticscholar.org/graph/v1/paper/search?query=%s&limit=2&fields=title,url,abstract",
 		q,
 	)
-
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
 	if err != nil {
 		return nil
 	}
-
 	resp, err := f.client.Do(req)
 	if err != nil || resp.StatusCode != http.StatusOK {
 		return nil
@@ -194,8 +239,7 @@ func (f *Fetcher) fetchSemanticScholar(ctx context.Context, claim string) []type
 	return sources
 }
 
-// --- PubMed (NCBI E-utilities) ---
-// Two-step: ESearch to get IDs, then ESummary to get titles/abstracts.
+// --- PubMed ---
 
 type pubmedSearchResp struct {
 	ESearchResult struct {
@@ -205,16 +249,16 @@ type pubmedSearchResp struct {
 
 type pubmedSummaryResp struct {
 	Result map[string]struct {
-		Title  string `json:"title"`
-		Source string `json:"source"`
+		Title   string `json:"title"`
+		Source  string `json:"source"`
 		PubDate string `json:"pubdate"`
 	} `json:"result"`
 }
 
-func (f *Fetcher) fetchPubMed(ctx context.Context, claim string) []types.Source {
-	q := url.QueryEscape(claim)
+func (f *Fetcher) fetchPubMed(ctx context.Context, query string) []types.Source {
+	q := url.QueryEscape(query)
 	searchURL := fmt.Sprintf(
-		"https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi?db=pubmed&term=%s&retmax=2&retmode=json&tool=factchecker&email=factchecker@example.com",
+		"https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi?db=pubmed&term=%s&retmax=2&retmode=json&tool=claiminspector&email=factchecker@example.com",
 		q,
 	)
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, searchURL, nil)
@@ -235,7 +279,7 @@ func (f *Fetcher) fetchPubMed(ctx context.Context, claim string) []types.Source 
 
 	ids := strings.Join(searchResp.ESearchResult.IDList, ",")
 	summaryURL := fmt.Sprintf(
-		"https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esummary.fcgi?db=pubmed&id=%s&retmode=json&tool=factchecker&email=factchecker@example.com",
+		"https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esummary.fcgi?db=pubmed&id=%s&retmode=json&tool=claiminspector&email=factchecker@example.com",
 		ids,
 	)
 	req2, err := http.NewRequestWithContext(ctx, http.MethodGet, summaryURL, nil)
@@ -271,4 +315,91 @@ func (f *Fetcher) fetchPubMed(ctx context.Context, claim string) []types.Source 
 		})
 	}
 	return sources
+}
+
+// filterRelevant drops sources whose titles/snippets share no terms with the claim or document.
+func filterRelevant(sources []types.Source, claim types.EnrichedClaim, doc types.DocumentContext) []types.Source {
+	terms := collectTerms(claim, doc)
+	if len(terms) == 0 {
+		return sources
+	}
+	var out []types.Source
+	for _, s := range sources {
+		if sourceRelevance(s, terms) >= 1 {
+			out = append(out, s)
+		}
+	}
+	// If everything was filtered out, keep unfiltered rather than scoring with zero evidence.
+	if len(out) == 0 && len(sources) > 0 {
+		return sources
+	}
+	return out
+}
+
+func collectTerms(claim types.EnrichedClaim, doc types.DocumentContext) map[string]bool {
+	terms := make(map[string]bool)
+	// Prefer named entities and topic — avoids stopwords like "the" causing false positives.
+	for _, e := range claim.Entities {
+		addTerms(terms, e)
+	}
+	for _, e := range doc.Entities {
+		addTerms(terms, e)
+	}
+	addTerms(terms, doc.Topic)
+	addTerms(terms, claim.WikipediaTitle)
+	// Fall back to salient words from the claim when no entities were extracted.
+	if len(terms) == 0 {
+		for _, w := range tokenize(claim.Text) {
+			if len(w) >= 5 {
+				terms[w] = true
+			}
+		}
+	}
+	return terms
+}
+
+func addTerms(m map[string]bool, s string) {
+	for _, w := range tokenize(s) {
+		if len(w) >= 3 {
+			m[w] = true
+		}
+	}
+}
+
+func tokenize(s string) []string {
+	var words []string
+	var b strings.Builder
+	flush := func() {
+		if b.Len() > 0 {
+			words = append(words, strings.ToLower(b.String()))
+			b.Reset()
+		}
+	}
+	for _, r := range s {
+		if unicode.IsLetter(r) || unicode.IsDigit(r) {
+			b.WriteRune(r)
+		} else {
+			flush()
+		}
+	}
+	flush()
+	return words
+}
+
+func wikiArticleURL(title string) string {
+	return "https://en.wikipedia.org/wiki/" + strings.ReplaceAll(title, " ", "_")
+}
+
+func sourceRelevance(s types.Source, terms map[string]bool) int {
+	hayTokens := make(map[string]bool)
+	for _, w := range tokenize(s.Title + " " + s.Snippet) {
+		hayTokens[w] = true
+	}
+	score := 0
+	for term := range terms {
+		if hayTokens[term] {
+			score++
+		}
+	}
+	return score
 }
