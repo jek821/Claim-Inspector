@@ -145,71 +145,115 @@ function fmtUsage(n,unit){
   return Math.round(n).toLocaleString();
 }
 
-// ── Cost + API usage bars ─────────────────────────────────────────────────────
-function CostBar({allTimeCost,allTimeIn,allTimeOut,sessionCost,sessionRuns}) {
-  const block = (title, children) => (
-    <div style={{display:"flex",alignItems:"baseline",gap:"10px",flexWrap:"wrap"}}>
-      <span style={{color:C.label,letterSpacing:"0.08em",textTransform:"uppercase",fontSize:"11px",fontWeight:700,minWidth:"72px"}}>{title}</span>
-      {children}
-    </div>
-  );
-  return (
-    <div style={{background:C.bar,borderBottom:`1px solid ${C.border}`,padding:"14px 40px",display:"flex",alignItems:"center",gap:"28px",fontSize:"14px",color:C.secondary,flexWrap:"wrap"}}>
-      {block("All-time", <>
-        <span style={{color:C.green,fontWeight:700,fontSize:"17px"}}>{fmt$(allTimeCost)}</span>
-        <span style={{color:C.faint}}>·</span>
-        <span style={{color:C.text,fontWeight:600}}>{fmtTok(allTimeIn)} in / {fmtTok(allTimeOut)} out</span>
-      </>)}
-      <span style={{color:C.border,fontSize:"18px",lineHeight:1}}>|</span>
-      {block("This session", <>
-        <span style={{color:C.blue,fontWeight:700,fontSize:"17px"}}>{fmt$(sessionCost)}</span>
-        <span style={{color:C.faint}}>·</span>
-        <span style={{color:C.text,fontWeight:600}}>{sessionRuns} run{sessionRuns!==1?"s":""}</span>
-      </>)}
-      <span style={{marginLeft:"auto",color:C.muted,fontSize:"13px"}}>Total = Haiku + billable APIs (Voyage · OpenAlex)</span>
-    </div>
-  );
-}
-
-function APIUsageBar({apiUsage, loading}) {
+// ── Top stats HUD (cost + API usage) ───────────────────────────────────────────
+function StatsHUD({ allTimeCost, allTimeIn, allTimeOut, sessionCost, sessionRuns, apiUsage, loading }) {
   const providers = apiUsage?.providers?.length ? apiUsage.providers : DEFAULT_API_PROVIDERS;
   const hot = p => p.limit > 0 && (p.pct_used || 0) >= 80;
   const usedFor = p => p.period === "account" ? (p.used_lifetime || 0) : (p.used_daily ?? p.used_lifetime ?? 0);
 
-  return (
-    <div style={{background:C.barApi,borderBottom:`2px solid ${C.blue}`,padding:"14px 40px 16px",fontSize:"13px",color:C.secondary}}>
-      <div style={{display:"flex",alignItems:"center",gap:"12px",marginBottom:"12px",flexWrap:"wrap"}}>
-        <span style={{color:C.blue,letterSpacing:"0.08em",textTransform:"uppercase",fontSize:"12px",fontWeight:700}}>API usage</span>
-        <span style={{color:C.muted}}>resets daily UTC · saved in history.json</span>
-        {apiUsage?.daily_reset_utc && <span style={{color:C.faint}}>· {apiUsage.daily_reset_utc}</span>}
-        {loading && <span style={{color:"#b45309",fontSize:"12px"}}>· updating…</span>}
+  const costCard = (label, value, sub, accent) => (
+    <div style={{
+      background: C.surface,
+      border: `2px solid ${C.border}`,
+      borderRadius: 12,
+      padding: "20px 24px",
+      boxShadow: "0 2px 8px rgba(15,23,42,0.06)",
+    }}>
+      <div style={{ fontSize: 13, fontWeight: 700, letterSpacing: "0.1em", textTransform: "uppercase", color: C.label, marginBottom: 8 }}>
+        {label}
       </div>
-      <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill, minmax(200px, 1fr))",gap:"14px 24px"}}>
+      <div style={{ fontSize: 32, fontWeight: 800, color: accent, lineHeight: 1.1, fontFamily: "'DM Mono',monospace" }}>
+        {value}
+      </div>
+      <div style={{ fontSize: 15, color: C.secondary, marginTop: 8, fontWeight: 500 }}>{sub}</div>
+    </div>
+  );
+
+  return (
+    <div style={{
+      background: C.surfaceHi,
+      borderBottom: `3px solid ${C.blue}`,
+      padding: "24px 32px 28px",
+      boxShadow: "0 4px 12px rgba(15,23,42,0.08)",
+    }}>
+      {/* Cost */}
+      <div style={{ fontSize: 15, fontWeight: 800, letterSpacing: "0.12em", textTransform: "uppercase", color: C.text, marginBottom: 16 }}>
+        Spend
+      </div>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))", gap: 16, marginBottom: 28 }}>
+        {costCard("All-time", fmt$(allTimeCost), `${fmtTok(allTimeIn)} in · ${fmtTok(allTimeOut)} out tokens`, C.green)}
+        {costCard("This session", fmt$(sessionCost), `${sessionRuns} run${sessionRuns !== 1 ? "s" : ""} this login`, C.blue)}
+      </div>
+      <div style={{ fontSize: 14, color: C.muted, marginBottom: 20 }}>
+        Total = Haiku + billable APIs (Voyage · OpenAlex)
+      </div>
+
+      {/* API usage */}
+      <div style={{ display: "flex", alignItems: "baseline", gap: 12, flexWrap: "wrap", marginBottom: 18 }}>
+        <span style={{ fontSize: 15, fontWeight: 800, letterSpacing: "0.12em", textTransform: "uppercase", color: C.text }}>
+          API usage
+        </span>
+        <span style={{ fontSize: 14, color: C.muted }}>resets daily UTC · saved in history.json</span>
+        {apiUsage?.daily_reset_utc && <span style={{ fontSize: 14, color: C.faint }}>· {apiUsage.daily_reset_utc}</span>}
+        {loading && <span style={{ fontSize: 14, color: "#b45309", fontWeight: 600 }}>· updating…</span>}
+      </div>
+
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))", gap: 16 }}>
         {providers.map(p => {
           const warn = hot(p);
           const pct = p.limit > 0 ? Math.min(100, p.pct_used || 0) : 0;
           const accent = warn ? "#ea580c" : C.blue;
           const used = usedFor(p);
+          const usageLabel = p.limit > 0
+            ? `${fmtUsage(used, p.unit)} / ${fmtUsage(p.limit, p.unit)}`
+            : fmtUsage(used, p.unit);
+
           return (
-            <div key={p.id} title={p.note || ""}>
-              <div style={{display:"flex",justifyContent:"space-between",marginBottom:"6px",gap:"8px",alignItems:"baseline"}}>
-                <span style={{color: warn ? "#c2410c" : C.text, fontWeight: 700, fontSize: "13px", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap"}}>
+            <div
+              key={p.id}
+              title={p.note || ""}
+              style={{
+                background: C.surface,
+                border: `2px solid ${warn ? "#fdba74" : C.border}`,
+                borderRadius: 10,
+                padding: "16px 18px",
+                boxShadow: "0 1px 4px rgba(15,23,42,0.05)",
+              }}
+            >
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 12, marginBottom: 12 }}>
+                <span style={{ fontSize: 15, fontWeight: 700, color: warn ? "#c2410c" : C.text, lineHeight: 1.3 }}>
                   {p.display_name}
                 </span>
-                <span style={{color: warn ? "#c2410c" : C.blue, fontWeight: 700, fontSize: "13px", flexShrink: 0}}>
-                  {p.limit > 0
-                    ? `${fmtUsage(used, p.unit)}/${fmtUsage(p.limit, p.unit)}`
-                    : fmtUsage(used, p.unit)}
+                <span style={{ fontSize: 16, fontWeight: 800, color: warn ? "#c2410c" : C.blue, flexShrink: 0, fontFamily: "'DM Mono',monospace" }}>
+                  {usageLabel}
                 </span>
               </div>
               {p.limit > 0 ? (
-                <div style={{height: 10, background: C.borderDim, borderRadius: 5, overflow: "hidden", border: `1px solid ${C.border}`}}>
-                  <div style={{height: "100%", width: `${Math.max(pct, pct > 0 ? 6 : 0)}%`, background: accent, borderRadius: 4, transition: "width 0.3s"}}/>
+                <div style={{ height: 18, background: "#e2e8f0", borderRadius: 9, overflow: "hidden", border: "1px solid #cbd5e1" }}>
+                  <div style={{
+                    height: "100%",
+                    width: `${Math.max(pct, pct > 0 ? 8 : 2)}%`,
+                    background: accent,
+                    borderRadius: 8,
+                    transition: "width 0.3s",
+                    minWidth: pct > 0 ? 8 : 2,
+                  }}/>
                 </div>
               ) : (
-                <div style={{height: 10, background: C.borderDim, borderRadius: 5, border: `1px solid ${C.border}`, display: "flex", alignItems: "center", paddingLeft: 8}}>
-                  <span style={{fontSize: "10px", color: C.muted, letterSpacing: "0.04em"}}>no cap tracked</span>
+                <div style={{
+                  height: 18,
+                  background: "#e2e8f0",
+                  borderRadius: 9,
+                  border: "1px solid #cbd5e1",
+                  display: "flex",
+                  alignItems: "center",
+                  paddingLeft: 12,
+                }}>
+                  <span style={{ fontSize: 12, color: C.muted, fontWeight: 600 }}>no cap tracked</span>
                 </div>
+              )}
+              {pct > 0 && p.limit > 0 && (
+                <div style={{ fontSize: 12, color: C.muted, marginTop: 6, fontWeight: 600 }}>{pct.toFixed(1)}% of limit</div>
               )}
             </div>
           );
@@ -766,8 +810,15 @@ export default function App() {
         textarea::placeholder,input::placeholder{color:${C.faint};opacity:1}
       `}</style>
 
-      <CostBar allTimeCost={allTimeCost} allTimeIn={allTimeIn} allTimeOut={allTimeOut} sessionCost={sessionCost} sessionRuns={sessionRuns}/>
-      <APIUsageBar apiUsage={apiUsage} loading={apiUsageLoading}/>
+      <StatsHUD
+        allTimeCost={allTimeCost}
+        allTimeIn={allTimeIn}
+        allTimeOut={allTimeOut}
+        sessionCost={sessionCost}
+        sessionRuns={sessionRuns}
+        apiUsage={apiUsage}
+        loading={apiUsageLoading}
+      />
 
       {/* Header */}
       <div style={{borderBottom:`1px solid ${C.borderDim}`,padding:"20px 40px",display:"flex",alignItems:"center",gap:"14px"}}>
