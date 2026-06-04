@@ -22,14 +22,62 @@ func decodeXML(data []byte) *xml.Decoder {
 // Fetcher retrieves supporting sources for a claim.
 type Fetcher struct {
 	client *http.Client
+	apiKey string
 }
 
-func NewFetcher() *Fetcher {
-	return &Fetcher{client: &http.Client{}}
+func NewFetcher(apiKey string) *Fetcher {
+	return &Fetcher{client: &http.Client{}, apiKey: apiKey}
+}
+
+type haikuResponse struct {
+	Content []struct {
+		Type string `json:"type"`
+		Text string `json:"text"`
+	} `json:"content"`
+}
+
+// generateSearchQuery uses Claude Haiku to extract focused search keywords from a claim.
+// Falls back to the raw claim on any error.
+func (f *Fetcher) generateSearchQuery(ctx context.Context, claim string) string {
+	if f.apiKey == "" {
+		return claim
+	}
+	body, _ := json.Marshal(map[string]any{
+		"model":      "claude-haiku-4-5-20251001",
+		"max_tokens": 30,
+		"system":     "Extract 3-5 key search terms from this factual claim for a Wikipedia search. Return only the search terms as a short phrase. No explanation, no extra punctuation.",
+		"messages":   []map[string]string{{"role": "user", "content": claim}},
+	})
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost,
+		"https://api.anthropic.com/v1/messages", bytes.NewReader(body))
+	if err != nil {
+		return claim
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("x-api-key", f.apiKey)
+	req.Header.Set("anthropic-version", "2023-06-01")
+
+	resp, err := f.client.Do(req)
+	if err != nil || resp.StatusCode != 200 {
+		return claim
+	}
+	defer resp.Body.Close()
+	raw, _ := io.ReadAll(resp.Body)
+	var ar haikuResponse
+	if err := json.Unmarshal(raw, &ar); err != nil || len(ar.Content) == 0 {
+		return claim
+	}
+	q := strings.TrimSpace(ar.Content[0].Text)
+	if q == "" {
+		return claim
+	}
+	return q
 }
 
 // FetchAll retrieves sources from all available providers concurrently.
 func (f *Fetcher) FetchAll(ctx context.Context, claim string) []types.Source {
+	query := f.generateSearchQuery(ctx, claim)
+
 	var (
 		mu      sync.Mutex
 		results []types.Source
@@ -43,10 +91,10 @@ func (f *Fetcher) FetchAll(ctx context.Context, claim string) []types.Source {
 	}
 
 	wg.Add(4)
-	go func() { defer wg.Done(); add(f.fetchWikipedia(ctx, claim)) }()
-	go func() { defer wg.Done(); add(f.fetchSemanticScholar(ctx, claim)) }()
-	go func() { defer wg.Done(); add(f.fetchArXiv(ctx, claim)) }()
-	go func() { defer wg.Done(); add(f.fetchPubMed(ctx, claim)) }()
+	go func() { defer wg.Done(); add(f.fetchWikipedia(ctx, query)) }()
+	go func() { defer wg.Done(); add(f.fetchSemanticScholar(ctx, query)) }()
+	go func() { defer wg.Done(); add(f.fetchArXiv(ctx, query)) }()
+	go func() { defer wg.Done(); add(f.fetchPubMed(ctx, query)) }()
 
 	wg.Wait()
 	return results

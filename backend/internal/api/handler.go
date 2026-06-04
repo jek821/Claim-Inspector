@@ -56,7 +56,7 @@ func NewHandler(authMgr *auth.Manager, anthropicKey string, maxCostUSD float64, 
 	return &Handler{
 		auth:       authMgr,
 		extractor:  claims.NewExtractor(anthropicKey),
-		fetcher:    sources.NewFetcher(),
+		fetcher:    sources.NewFetcher(anthropicKey),
 		scorer:     scorer.NewScorer(anthropicKey),
 		batchCli:   batch.NewClient(anthropicKey),
 		jobs:       newJobStore(),

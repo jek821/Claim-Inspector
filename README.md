@@ -9,7 +9,7 @@ Paste text or upload a document — claims are highlighted green/yellow/orange/r
 ## How it works
 
 1. Text is split into atomic factual claims (one Haiku API call for the whole document)
-2. Each claim is searched concurrently against Wikipedia, Semantic Scholar, arXiv, and PubMed
+2. Each claim is condensed into focused search keywords (one Haiku call per claim), then searched concurrently against Wikipedia, Semantic Scholar, arXiv, and PubMed
 3. Retrieved sources are passed to Haiku to score each claim: `verified / low / medium / high / unverifiable`
 4. Results stream back in real-time with color-coded highlights and clickable source links
 5. Every completed run is saved to disk — history and cumulative costs survive server restarts
