@@ -16,7 +16,7 @@ const (
 	// Output tokens per claim score
 	OutputPerClaim = 150
 	// Average claims per 100 words of input
-	ClaimsPerHundredWords = 2.5
+	ClaimsPerHundredWords = 5.0
 	// Extraction call overhead (system prompt)
 	ExtractionOverhead = 200
 )

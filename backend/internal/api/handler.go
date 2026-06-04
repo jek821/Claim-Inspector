@@ -164,22 +164,29 @@ func (h *Handler) History(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(resp)
 }
 
-// HistoryItem handles PATCH /history/:id for renaming a run.
+// HistoryItem handles PATCH /history/:id (rename) and DELETE /history/:id.
 func (h *Handler) HistoryItem(w http.ResponseWriter, r *http.Request) {
 	id := strings.TrimPrefix(r.URL.Path, "/history/")
 	if id == "" { http.Error(w, "missing run id", http.StatusBadRequest); return }
 
-	if r.Method != http.MethodPatch {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed); return
+	switch r.Method {
+	case http.MethodPatch:
+		var req types.RenameRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "invalid body", http.StatusBadRequest); return
+		}
+		found, err := h.store.RenameRun(id, strings.TrimSpace(req.Label))
+		if err != nil { http.Error(w, "store error", http.StatusInternalServerError); return }
+		if !found { http.Error(w, "run not found", http.StatusNotFound); return }
+		w.WriteHeader(http.StatusNoContent)
+	case http.MethodDelete:
+		found, err := h.store.DeleteRun(id)
+		if err != nil { http.Error(w, "store error", http.StatusInternalServerError); return }
+		if !found { http.Error(w, "run not found", http.StatusNotFound); return }
+		w.WriteHeader(http.StatusNoContent)
+	default:
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 	}
-	var req types.RenameRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "invalid body", http.StatusBadRequest); return
-	}
-	found, err := h.store.RenameRun(id, strings.TrimSpace(req.Label))
-	if err != nil { http.Error(w, "store error", http.StatusInternalServerError); return }
-	if !found { http.Error(w, "run not found", http.StatusNotFound); return }
-	w.WriteHeader(http.StatusNoContent)
 }
 
 func (h *Handler) Analyze(w http.ResponseWriter, r *http.Request) {

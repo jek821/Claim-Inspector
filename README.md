@@ -267,6 +267,25 @@ After Certbot runs, confirm `ALLOWED_ORIGIN` in `/etc/factchecker/.env` is set t
 sudo systemctl restart factchecker
 ```
 
+### Updating a running deployment
+
+**Backend** — rebuild the binary and restart the service:
+```bash
+cd backend
+GOOS=linux GOARCH=amd64 go build -o factchecker-server ./cmd/server
+# copy binary to server, then:
+sudo systemctl restart factchecker
+```
+
+**Frontend** — rebuild and redeploy the static files:
+```bash
+cd frontend
+npm run build
+sudo cp -r dist/* /var/www/factchecker/
+```
+
+No nginx restart is needed for frontend-only changes.
+
 ---
 
 ## Running locally (development)
@@ -370,6 +389,19 @@ Returns all past runs and cumulative cost totals.
     "total_output_tokens": 8400,
     "total_cost_usd": 0.084
   }
+```
+
+### `PATCH /history/:id` *(auth)*
+Rename a past run.
+```json
+{ "label": "My custom name" }
+→ 204 No Content
+```
+
+### `DELETE /history/:id` *(auth)*
+Delete a past run. Also subtracts its cost from the all-time totals.
+```
+→ 204 No Content
 ```
 
 ### `GET /health`

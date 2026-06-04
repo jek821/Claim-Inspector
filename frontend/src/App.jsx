@@ -152,7 +152,7 @@ function fmtDateFull(s) {
     + " " + d.toLocaleTimeString(undefined, { hour:"2-digit", minute:"2-digit" });
 }
 
-function HistoryPanel({token,onLoad}) {
+function HistoryPanel({token,onLoad,refreshKey}) {
   const [runs,setRuns]       = useState(null);
   const [open,setOpen]       = useState(false);
   const [loading,setLoading] = useState(false);
@@ -168,9 +168,20 @@ function HistoryPanel({token,onLoad}) {
     finally { setLoading(false); }
   }
 
+  useEffect(()=>{
+    if(refreshKey===0) return;
+    if(open) fetchHistory();
+    else setRuns(null); // mark stale so next open re-fetches
+  },[refreshKey]);
+
   function toggle() {
     if(!open&&runs===null) fetchHistory();
     setOpen(o=>!o);
+  }
+
+  async function deleteRun(id) {
+    await fetch(`${API}/history/${id}`,{method:"DELETE",headers:authH(token)}).catch(()=>{});
+    setRuns(rs=>rs.filter(r=>r.id!==id));
   }
 
   async function saveLabel(id) {
@@ -237,14 +248,20 @@ function HistoryPanel({token,onLoad}) {
                     </div>
                   </div>
 
-                  {/* Right side: cost + rename button */}
+                  {/* Right side: cost + rename + delete */}
                   <div style={{display:"flex",flexDirection:"column",alignItems:"flex-end",gap:"4px",flexShrink:0}}>
                     <span style={{fontSize:"11px",color:"#475569"}}>{fmt$(run.cost?.exact_cost_usd||0)}</span>
                     {!isEditing&&(
-                      <button onClick={e=>{e.stopPropagation();setEditing(run.id);setEditVal(run.label||"");}}
-                        style={{...S.ghost,fontSize:"10px",padding:"2px 6px",letterSpacing:"0.05em"}}>
-                        rename
-                      </button>
+                      <div style={{display:"flex",gap:"4px"}}>
+                        <button onClick={e=>{e.stopPropagation();setEditing(run.id);setEditVal(run.label||"");}}
+                          style={{...S.ghost,fontSize:"10px",padding:"2px 6px",letterSpacing:"0.05em"}}>
+                          rename
+                        </button>
+                        <button onClick={e=>{e.stopPropagation();deleteRun(run.id);}}
+                          style={{...S.ghost,fontSize:"10px",padding:"2px 6px",color:"#f87171",borderColor:"rgba(248,113,113,0.3)"}}>
+                          del
+                        </button>
+                      </div>
                     )}
                   </div>
                 </div>
@@ -366,6 +383,8 @@ export default function App() {
   // Session counters
   const [sessionCost,setSessionCost] = useState(0);
   const [sessionRuns,setSessionRuns] = useState(0);
+  // Trigger history refresh after each completed run
+  const [histRefreshKey,setHistRefreshKey] = useState(0);
 
   const fileRef = useRef(null);
   const estTimer = useRef(null);
@@ -418,6 +437,7 @@ export default function App() {
     setAllTimeCost(s=>s+cost.exact_cost_usd);
     setAllTimeIn(s=>s+cost.usage.input_tokens);
     setAllTimeOut(s=>s+cost.usage.output_tokens);
+    setHistRefreshKey(k=>k+1);
   }
 
   async function analyze(){
@@ -544,7 +564,7 @@ export default function App() {
 
       <div style={{maxWidth:"900px",margin:"0 auto",padding:"32px 40px"}}>
 
-        <HistoryPanel token={token} onLoad={loadHistoryRun}/>
+        <HistoryPanel token={token} onLoad={loadHistoryRun} refreshKey={histRefreshKey}/>
 
         {/* Input */}
         <div style={{marginBottom:"14px"}}>

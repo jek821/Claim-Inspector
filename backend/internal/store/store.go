@@ -82,6 +82,22 @@ func (s *Store) RenameRun(id, label string) (bool, error) {
 	return false, nil
 }
 
+// DeleteRun removes a run by ID and subtracts its cost from totals. Returns false if not found.
+func (s *Store) DeleteRun(id string) (bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for i, r := range s.data.Runs {
+		if r.ID == id {
+			s.data.TotalInputTok -= r.Cost.Usage.InputTokens
+			s.data.TotalOutputTok -= r.Cost.Usage.OutputTokens
+			s.data.TotalCostUSD -= r.Cost.ExactCostUSD
+			s.data.Runs = append(s.data.Runs[:i], s.data.Runs[i+1:]...)
+			return true, s.save()
+		}
+	}
+	return false, nil
+}
+
 // GetHistory returns all stored runs (newest first).
 func (s *Store) GetHistory() []Run {
 	s.mu.RLock()
