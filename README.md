@@ -1,6 +1,6 @@
 # Claim Inspector
 
-An open-source fact-checking tool that cross-references text against Wikipedia, Semantic Scholar, arXiv, PubMed, and NewsAPI, then uses Claude Haiku to score each claim by accuracy risk.
+An open-source fact-checking tool that cross-references text against Wikipedia, Semantic Scholar, arXiv, and PubMed, then uses Claude Haiku to score each claim by accuracy risk.
 
 Paste text or upload a document — claims are highlighted green/yellow/orange/red based on how suspect they are, with source links for every finding. Full run history and cost tracking persist across server restarts.
 
@@ -9,7 +9,7 @@ Paste text or upload a document — claims are highlighted green/yellow/orange/r
 ## How it works
 
 1. Text is split into atomic factual claims (one Haiku API call for the whole document)
-2. Each claim is searched concurrently against Wikipedia, Semantic Scholar, arXiv, and PubMed (plus NewsAPI if configured)
+2. Each claim is searched concurrently against Wikipedia, Semantic Scholar, arXiv, and PubMed
 3. Retrieved sources are passed to Haiku to score each claim: `verified / low / medium / high / unverifiable`
 4. Results stream back in real-time with color-coded highlights and clickable source links
 5. Every completed run is saved to disk — history and cumulative costs survive server restarts
@@ -47,7 +47,7 @@ To minimize cost, strip headers, footers, citations, and page numbers before upl
 - **Backend** — Go 1.22+ (stdlib only, no frameworks)
 - **Frontend** — React + Vite, single-page app
 - **AI** — Claude Haiku 4.5 via Anthropic API ($1/$5 per million input/output tokens)
-- **Sources** — Wikipedia (free), Semantic Scholar (free), arXiv (free), PubMed/NCBI E-utilities (free), NewsAPI (optional, free tier: 100 req/day)
+- **Sources** — Wikipedia (free), Semantic Scholar (free), arXiv (free), PubMed/NCBI E-utilities (free)
 - **Persistence** — JSON file on disk (`data/history.json`), atomic writes
 
 ---
@@ -62,7 +62,6 @@ Before deploying, you'll need:
 - nginx — `sudo apt install nginx`
 - poppler-utils — for PDF support: `sudo apt install poppler-utils`
 - An **Anthropic API key** — get one at https://console.anthropic.com
-- *(Optional)* A **NewsAPI key** — free tier at https://newsapi.org (100 req/day). Without it the tool works via Wikipedia, Semantic Scholar, arXiv, and PubMed.
 
 ---
 
@@ -86,7 +85,8 @@ cp backend/.env.example backend/.env
 
 | Variable | Default | Description |
 |---|---|---|
-| `NEWS_API_KEY` | *(empty)* | NewsAPI key for news source cross-referencing. Tool works without it |
+| `MAX_COST_USD` | *(none)* | Hard spending cap in USD. Requests are rejected with HTTP 402 if the accumulated spend has reached this value, or if the pre-flight estimate shows the request would push spend past it. Omit or set to `0` for no limit |
+| `ALLOWED_ORIGIN` | `*` | Frontend origin allowed by CORS — e.g. `https://yourdomain.com`. Defaults to `*` (all origins) with a startup warning. Always set this in production |
 | `PORT` | `8080` | Port the backend listens on |
 | `DATA_DIR` | `data` | Directory where `history.json` is stored. Set to an absolute path on your VPS so history survives redeploys (e.g. `/var/lib/factchecker`) |
 
@@ -96,7 +96,8 @@ cp backend/.env.example backend/.env
 ANTHROPIC_API_KEY=sk-ant-api03-...
 APP_USERNAME=jacob
 APP_PASSWORD=some-long-random-password
-NEWS_API_KEY=abc123yourkeyhere
+MAX_COST_USD=10.00
+ALLOWED_ORIGIN=https://yourdomain.com
 PORT=8080
 DATA_DIR=/var/lib/factchecker
 ```
@@ -154,6 +155,8 @@ scp factchecker-server user@yourserver:/usr/local/bin/factchecker-server
 sudo mkdir -p /etc/factchecker
 sudo nano /etc/factchecker/.env
 # Fill in your variables (see above)
+# Make sure ALLOWED_ORIGIN matches your domain, e.g.:
+#   ALLOWED_ORIGIN=https://yourdomain.com
 sudo chmod 600 /etc/factchecker/.env
 
 # Create data directory for history persistence
@@ -258,6 +261,12 @@ sudo certbot --nginx -d yourdomain.com
 
 Certbot automatically updates your nginx config. HTTPS is required for the app to work correctly in most modern browsers, and ensures your login credentials are encrypted in transit.
 
+After Certbot runs, confirm `ALLOWED_ORIGIN` in `/etc/factchecker/.env` is set to your `https://` domain, then restart the backend:
+
+```bash
+sudo systemctl restart factchecker
+```
+
 ---
 
 ## Running locally (development)
@@ -267,6 +276,7 @@ Certbot automatically updates your nginx config. HTTPS is required for the app t
 cd backend
 cp .env.example .env
 # Fill in ANTHROPIC_API_KEY, APP_USERNAME, APP_PASSWORD
+# ALLOWED_ORIGIN can be left empty locally (defaults to *)
 go run ./cmd/server
 # Runs on http://localhost:8080
 # History saved to ./data/history.json
@@ -294,13 +304,15 @@ All pricing is for Claude Haiku 4.5 as of May 2026. The in-app cost tracker show
 | 100 pages | ~$0.09 | ~$0.045 |
 | 1,000 pages | ~$0.90 | ~$0.45 |
 
-Wikipedia, Semantic Scholar, arXiv, and PubMed are all free with no API keys required. NewsAPI free tier allows 100 requests/day — each claim uses one request, so you'll hit the limit around 100 claims/day on the free tier.
+Wikipedia, Semantic Scholar, arXiv, and PubMed are all free with no API keys required.
 
 ---
 
 ## API reference
 
 All protected endpoints require `Authorization: Bearer <token>` header.
+
+Any analyze endpoint returns **HTTP 402** (plain-text body) if `MAX_COST_USD` is set and the request would exceed the remaining budget.
 
 ### `POST /login`
 ```json
@@ -319,6 +331,8 @@ Standard JSON endpoint. Returns immediately for sync; returns `batch_id` for asy
 // Batch response (batch: true):
 → { "batch_id": "msgbatch_...", "message": "Batch submitted with 8 claims..." }
 ```
+
+Each claim object includes a `sources` array. Every source has a `provider` field indicating where it came from: `wikipedia`, `semantic_scholar`, `arxiv`, or `pubmed`.
 
 ### `POST /analyze/stream` *(auth)*
 SSE endpoint for real-time progress during instant mode. Returns `text/event-stream`.

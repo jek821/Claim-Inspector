@@ -13,7 +13,7 @@ type Source struct {
 	Title   string `json:"title"`
 	URL     string `json:"url"`
 	Snippet string `json:"snippet"`
-	Provider string `json:"provider"` // wikipedia | semantic_scholar | arxiv | pubmed | newsapi
+	Provider string `json:"provider"` // wikipedia | semantic_scholar | arxiv | pubmed
 }
 
 // TokenUsage tracks exact token counts from the Anthropic API.

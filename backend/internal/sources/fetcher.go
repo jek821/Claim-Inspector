@@ -21,12 +21,11 @@ func decodeXML(data []byte) *xml.Decoder {
 
 // Fetcher retrieves supporting sources for a claim.
 type Fetcher struct {
-	newsAPIKey string
-	client     *http.Client
+	client *http.Client
 }
 
-func NewFetcher(newsAPIKey string) *Fetcher {
-	return &Fetcher{newsAPIKey: newsAPIKey, client: &http.Client{}}
+func NewFetcher() *Fetcher {
+	return &Fetcher{client: &http.Client{}}
 }
 
 // FetchAll retrieves sources from all available providers concurrently.
@@ -48,11 +47,6 @@ func (f *Fetcher) FetchAll(ctx context.Context, claim string) []types.Source {
 	go func() { defer wg.Done(); add(f.fetchSemanticScholar(ctx, claim)) }()
 	go func() { defer wg.Done(); add(f.fetchArXiv(ctx, claim)) }()
 	go func() { defer wg.Done(); add(f.fetchPubMed(ctx, claim)) }()
-
-	if f.newsAPIKey != "" {
-		wg.Add(1)
-		go func() { defer wg.Done(); add(f.fetchNewsAPI(ctx, claim)) }()
-	}
 
 	wg.Wait()
 	return results
@@ -99,9 +93,10 @@ func (f *Fetcher) fetchWikipedia(ctx context.Context, claim string) []types.Sour
 		snippet := strings.ReplaceAll(s.Snippet, "<span class=\"searchmatch\">", "")
 		snippet = strings.ReplaceAll(snippet, "</span>", "")
 		sources = append(sources, types.Source{
-			Title:   s.Title,
-			URL:     "https://en.wikipedia.org/wiki/" + url.QueryEscape(strings.ReplaceAll(s.Title, " ", "_")),
-			Snippet: snippet,
+			Title:    s.Title,
+			URL:      "https://en.wikipedia.org/wiki/" + url.QueryEscape(strings.ReplaceAll(s.Title, " ", "_")),
+			Snippet:  snippet,
+			Provider: "wikipedia",
 		})
 	}
 	return sources
@@ -148,54 +143,10 @@ func (f *Fetcher) fetchSemanticScholar(ctx context.Context, claim string) []type
 			snippet = snippet[:300] + "..."
 		}
 		sources = append(sources, types.Source{
-			Title:   p.Title,
-			URL:     p.URL,
-			Snippet: snippet,
-		})
-	}
-	return sources
-}
-
-// --- NewsAPI ---
-
-type newsResp struct {
-	Articles []struct {
-		Title       string `json:"title"`
-		URL         string `json:"url"`
-		Description string `json:"description"`
-	} `json:"articles"`
-}
-
-func (f *Fetcher) fetchNewsAPI(ctx context.Context, claim string) []types.Source {
-	q := url.QueryEscape(claim)
-	endpoint := fmt.Sprintf(
-		"https://newsapi.org/v2/everything?q=%s&pageSize=2&sortBy=relevancy&apiKey=%s",
-		q, f.newsAPIKey,
-	)
-
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
-	if err != nil {
-		return nil
-	}
-
-	resp, err := f.client.Do(req)
-	if err != nil || resp.StatusCode != http.StatusOK {
-		return nil
-	}
-	defer resp.Body.Close()
-
-	body, _ := io.ReadAll(resp.Body)
-	var nr newsResp
-	if err := json.Unmarshal(body, &nr); err != nil {
-		return nil
-	}
-
-	var sources []types.Source
-	for _, a := range nr.Articles {
-		sources = append(sources, types.Source{
-			Title:   a.Title,
-			URL:     a.URL,
-			Snippet: a.Description,
+			Title:    p.Title,
+			URL:      p.URL,
+			Snippet:  snippet,
+			Provider: "semantic_scholar",
 		})
 	}
 	return sources
@@ -256,9 +207,10 @@ func (f *Fetcher) fetchArXiv(ctx context.Context, claim string) []types.Source {
 			continue
 		}
 		sources = append(sources, types.Source{
-			Title:   title + " [arXiv]",
-			URL:     arxivURL,
-			Snippet: snippet,
+			Title:    title + " [arXiv]",
+			URL:      arxivURL,
+			Snippet:  snippet,
+			Provider: "arxiv",
 		})
 	}
 	return sources
@@ -334,9 +286,10 @@ func (f *Fetcher) fetchPubMed(ctx context.Context, claim string) []types.Source 
 			snippet += " (" + article.PubDate + ")"
 		}
 		sources = append(sources, types.Source{
-			Title:   article.Title + " [PubMed]",
-			URL:     "https://pubmed.ncbi.nlm.nih.gov/" + id + "/",
-			Snippet: snippet,
+			Title:    article.Title + " [PubMed]",
+			URL:      "https://pubmed.ncbi.nlm.nih.gov/" + id + "/",
+			Snippet:  snippet,
+			Provider: "pubmed",
 		})
 	}
 	return sources

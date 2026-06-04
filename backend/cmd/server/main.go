@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 
 	"factchecker/internal/api"
 	"factchecker/internal/auth"
@@ -27,7 +28,23 @@ func main() {
 	password := os.Getenv("APP_PASSWORD")
 	if username == "" || password == "" { log.Fatal("APP_USERNAME and APP_PASSWORD are required") }
 
-	newsAPIKey := os.Getenv("NEWS_API_KEY")
+	var maxCostUSD float64
+	if v := os.Getenv("MAX_COST_USD"); v != "" {
+		if c, err := strconv.ParseFloat(v, 64); err == nil && c > 0 {
+			maxCostUSD = c
+			log.Printf("Cost limit: $%.4f", maxCostUSD)
+		} else {
+			log.Printf("warn: invalid MAX_COST_USD %q — no limit applied", v)
+		}
+	}
+
+	allowedOrigin := os.Getenv("ALLOWED_ORIGIN")
+	if allowedOrigin == "" {
+		allowedOrigin = "*"
+		log.Printf("warn: ALLOWED_ORIGIN not set — using wildcard CORS (set it in production)")
+	} else {
+		log.Printf("CORS origin: %s", allowedOrigin)
+	}
 
 	// Data directory — configurable, default to ./data
 	dataDir := os.Getenv("DATA_DIR")
@@ -39,20 +56,23 @@ func main() {
 	log.Printf("Store loaded from %s", storePath)
 
 	authMgr := auth.NewManager(username, password)
-	handler := api.NewHandler(authMgr, anthropicKey, newsAPIKey, st)
+	handler := api.NewHandler(authMgr, anthropicKey, maxCostUSD, st)
 
 	mux := http.NewServeMux()
 	handler.RegisterRoutes(mux)
 
 	log.Printf("Server starting on :%s", port)
-	if err := http.ListenAndServe(":"+port, corsMiddleware(mux)); err != nil {
+	if err := http.ListenAndServe(":"+port, corsMiddleware(mux, allowedOrigin)); err != nil {
 		log.Fatal(err)
 	}
 }
 
-func corsMiddleware(next http.Handler) http.Handler {
+func corsMiddleware(next http.Handler, allowedOrigin string) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Access-Control-Allow-Origin", "*")
+		w.Header().Set("Access-Control-Allow-Origin", allowedOrigin)
+		if allowedOrigin != "*" {
+			w.Header().Set("Vary", "Origin")
+		}
 		w.Header().Set("Access-Control-Allow-Methods", "POST, GET, OPTIONS")
 		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
 		if r.Method == http.MethodOptions { w.WriteHeader(http.StatusNoContent); return }

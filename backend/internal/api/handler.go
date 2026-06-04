@@ -42,25 +42,50 @@ func (s *jobStore) get(id string) (*types.BatchStatusResponse, bool) {
 
 // Handler holds all dependencies for the HTTP API.
 type Handler struct {
-	auth      *auth.Manager
-	extractor *claims.Extractor
-	fetcher   *sources.Fetcher
-	scorer    *scorer.Scorer
-	batchCli  *batch.Client
-	jobs      *jobStore
-	store     *store.Store
+	auth       *auth.Manager
+	extractor  *claims.Extractor
+	fetcher    *sources.Fetcher
+	scorer     *scorer.Scorer
+	batchCli   *batch.Client
+	jobs       *jobStore
+	store      *store.Store
+	maxCostUSD float64 // 0 = unlimited
 }
 
-func NewHandler(authMgr *auth.Manager, anthropicKey, newsAPIKey string, st *store.Store) *Handler {
+func NewHandler(authMgr *auth.Manager, anthropicKey string, maxCostUSD float64, st *store.Store) *Handler {
 	return &Handler{
-		auth:      authMgr,
-		extractor: claims.NewExtractor(anthropicKey),
-		fetcher:   sources.NewFetcher(newsAPIKey),
-		scorer:    scorer.NewScorer(anthropicKey),
-		batchCli:  batch.NewClient(anthropicKey),
-		jobs:      newJobStore(),
-		store:     st,
+		auth:       authMgr,
+		extractor:  claims.NewExtractor(anthropicKey),
+		fetcher:    sources.NewFetcher(),
+		scorer:     scorer.NewScorer(anthropicKey),
+		batchCli:   batch.NewClient(anthropicKey),
+		jobs:       newJobStore(),
+		store:      st,
+		maxCostUSD: maxCostUSD,
 	}
+}
+
+// costLimitOK returns true when the request may proceed. If the configured
+// spending cap is set and this request would exceed it, it writes a 402
+// response and returns false.
+func (h *Handler) costLimitOK(w http.ResponseWriter, text string) bool {
+	if h.maxCostUSD <= 0 {
+		return true
+	}
+	_, _, spent := h.store.GetTotals()
+	if spent >= h.maxCostUSD {
+		http.Error(w, fmt.Sprintf("cost limit of $%.4f reached (spent $%.4f)", h.maxCostUSD, spent), http.StatusPaymentRequired)
+		return false
+	}
+	remaining := h.maxCostUSD - spent
+	_, _, _, estCost, _ := pricing.EstimateFromText(text)
+	if estCost > remaining {
+		http.Error(w,
+			fmt.Sprintf("request would exceed cost limit: ~$%.4f estimated, $%.4f remaining of $%.4f budget", estCost, remaining, h.maxCostUSD),
+			http.StatusPaymentRequired)
+		return false
+	}
+	return true
 }
 
 func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
@@ -165,6 +190,7 @@ func (h *Handler) Analyze(w http.ResponseWriter, r *http.Request) {
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || strings.TrimSpace(req.Text) == "" {
 		http.Error(w, "invalid request body", http.StatusBadRequest); return
 	}
+	if !h.costLimitOK(w, req.Text) { return }
 	if req.Batch {
 		h.submitBatch(w, req.Text, req.Label, req.FileName)
 	} else {
@@ -178,6 +204,7 @@ func (h *Handler) AnalyzeFile(w http.ResponseWriter, r *http.Request) {
 	}
 	text, filename, err := h.readFileUpload(w, r)
 	if err != nil { return }
+	if !h.costLimitOK(w, text) { return }
 	label := r.FormValue("label")
 	if r.FormValue("batch") == "true" {
 		h.submitBatch(w, text, label, filename)
@@ -197,6 +224,7 @@ func (h *Handler) AnalyzeStream(w http.ResponseWriter, r *http.Request) {
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || strings.TrimSpace(req.Text) == "" {
 		http.Error(w, "invalid request body", http.StatusBadRequest); return
 	}
+	if !h.costLimitOK(w, req.Text) { return }
 
 	// Set SSE headers
 	w.Header().Set("Content-Type", "text/event-stream")

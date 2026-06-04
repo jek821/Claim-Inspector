@@ -14,9 +14,7 @@ const API = import.meta.env.VITE_API_URL ?? "http://localhost:8080";
 
 function fmt$(n) { if(n<0.0001)return"<$0.0001"; return`$${n.toFixed(4)}`; }
 function fmtTok(n) { return n>=1000?`${(n/1000).toFixed(1)}k`:String(n); }
-function fmtDate(s) { const d=new Date(s); return d.toLocaleDateString(undefined,{month:"short",day:"numeric",hour:"2-digit",minute:"2-digit"}); }
 function authH(t) { return{"Content-Type":"application/json",Authorization:`Bearer ${t}`}; }
-function titleSnippet(t) { return t.length>60?t.slice(0,60)+"…":t; }
 
 function Spinner({size=12,color="#94a3b8"}) {
   return <span style={{display:"inline-block",width:size,height:size,border:`2px solid #1e2a3a`,borderTopColor:color,borderRadius:"50%",animation:"spin 0.8s linear infinite",flexShrink:0}}/>;
@@ -431,6 +429,7 @@ export default function App() {
       try {
         const r=await fetch(`${API}/analyze`,{method:"POST",headers:authH(token),body:JSON.stringify({text:input,batch:true,label,filename:fileName||""})});
         if(r.status===401){sessionStorage.removeItem("fc_token");setToken(null);return;}
+        if(r.status===402){setError(await r.text());return;}
         if(!r.ok) throw new Error(`Server error: ${r.status}`);
         const d=await r.json();
         if(d.batch_id){
@@ -444,13 +443,11 @@ export default function App() {
     } else {
       // Sync — use SSE stream endpoint
       try {
-        const es = new EventSource(`${API}/analyze/stream`);
-        // EventSource doesn't support POST, so we need to send via fetch with SSE headers
-        // Instead use fetch + ReadableStream
         const resp = await fetch(`${API}/analyze/stream`,{
           method:"POST", headers:authH(token), body:JSON.stringify({text:input,batch:false,label,filename:fileName||""})
         });
         if(resp.status===401){sessionStorage.removeItem("fc_token");setToken(null);setLoading(false);return;}
+        if(resp.status===402){setError(await resp.text());setLoading(false);return;}
         if(!resp.ok) throw new Error(`Server error: ${resp.status}`);
 
         const reader=resp.body.getReader();
@@ -541,7 +538,7 @@ export default function App() {
       <div style={{borderBottom:"1px solid #1e2536",padding:"20px 40px",display:"flex",alignItems:"center",gap:"14px"}}>
         <span style={{fontSize:"11px",letterSpacing:"0.2em",color:"#4a5568",textTransform:"uppercase"}}>VERIFY</span>
         <h1 style={{margin:0,fontSize:"20px",fontWeight:700,fontFamily:"'DM Serif Display',Georgia,serif",color:"#f1f5f9",letterSpacing:"-0.02em"}}>Claim Inspector</h1>
-        <span style={{fontSize:"11px",color:"#4a5568",marginLeft:"auto"}}>Wikipedia · Semantic Scholar · arXiv · PubMed · NewsAPI</span>
+        <span style={{fontSize:"11px",color:"#4a5568",marginLeft:"auto"}}>Wikipedia · Semantic Scholar · arXiv · PubMed</span>
         <button onClick={handleLogout} style={{...S.ghost}}>sign out</button>
       </div>
 
@@ -621,6 +618,7 @@ export default function App() {
         {progress&&<ProgressBar done={progress.done} total={progress.total} current={progress.current} mode={progress.mode}/>}
 
         {claims&&<ClaimsView claims={claims} input={input} lastCost={lastCost}/>}
+      </div>
       </div>
     </div>
   );
